@@ -66,7 +66,7 @@
 #define DJI_LOG_MAX_COUNT               (10)
 #define DJI_SYSTEM_CMD_STR_MAX_SIZE     (64)
 #define DJI_SYSTEM_RESULT_STR_MAX_SIZE  (128)
-#define RANAVNER_CSV_PATH               "/home/rsp/drone_air_system/data_to_sdk/vitals.csv"
+#define TRANSMITTED_CSV_PATH               "/home/rsp/drone_air_system/data_to_sdk/vitals.csv"
 
 
 /* Private types -------------------------------------------------------------*/
@@ -199,7 +199,7 @@ int main(int argc, char **argv)
             USER_LOG_ERROR("widget sample init error");
         
         }
-        DjiTest_WidgetSetCsvFilePath(RANAVNER_CSV_PATH);
+        DjiTest_WidgetSetCsvFilePath(TRANSMITTED_CSV_PATH);
     #endif
 
   

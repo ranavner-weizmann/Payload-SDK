@@ -54,6 +54,7 @@ static T_DjiReturnCode DjiTestWidget_GetWidgetValue(E_DjiWidgetType widgetType, 
 /* Private values ------------------------------------------------------------*/
 static T_DjiTaskHandle s_widgetTestThread;
 
+/* csv transmision to the rc (ranavner)---------------------------------------*/
 static bool s_isCsvFilePathConfigured = false;
 static char s_csvFilePath[WIDGET_DIR_PATH_LEN_MAX] = {0};
 
