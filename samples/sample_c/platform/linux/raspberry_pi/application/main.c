@@ -56,9 +56,6 @@
 #include "data_transmission/test_data_transmission.h"
 #include "tethered_battery/test_tethered_battery.h"
 #include "dji_sdk_config.h"
-#include "pps.h"
-#include "time_sync/test_time_sync.h"
-#include "positioning/test_positioning.h"
 
 /* Private constants ---------------------------------------------------------*/
 #define DJI_LOG_PATH                    "Logs/DJI"
@@ -69,6 +66,8 @@
 #define DJI_LOG_MAX_COUNT               (10)
 #define DJI_SYSTEM_CMD_STR_MAX_SIZE     (64)
 #define DJI_SYSTEM_RESULT_STR_MAX_SIZE  (128)
+#define RANAVNER_CSV_PATH               "/home/rsp/ranavner.csv"
+
 
 /* Private types -------------------------------------------------------------*/
 typedef struct {
@@ -198,8 +197,13 @@ int main(int argc, char **argv)
         returnCode = DjiTest_WidgetInteractionStartService();
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("widget sample init error");
+        
         }
+        DjiTest_WidgetSetCsvFilePath(RANAVNER_CSV_PATH);
     #endif
+
+  
+
 
     #if CONFIG_MODULE_SAMPLE_WIDGET_SPEAKER_ON
         returnCode = DjiTest_WidgetSpeakerStartService();
@@ -211,7 +215,6 @@ int main(int argc, char **argv)
     if (aircraftInfoBaseInfo.mountPosition == DJI_MOUNT_POSITION_EXTENSION_PORT &&
         (aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M300_RTK ||
          aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M350_RTK)) {
-        // TODO: something is no support on E-Port of M300/M350 ???
     } else {
         #if CONFIG_MODULE_SAMPLE_CAMERA_EMU_ON
             returnCode = DjiTest_CameraEmuBaseStartService();
@@ -310,29 +313,6 @@ int main(int argc, char **argv)
             }
         }
     #endif
-
-    #if CONFIG_MODULE_SAMPLE_TIME_SYNC_ON
-        T_DjiTestTimeSyncHandler testTimeSyncHandler = {
-            .PpsSignalResponseInit = DjiTestRsp_PpsSignalResponseInit,
-            .GetNewestPpsTriggerLocalTimeUs = DjiTestRsp_GetNewestPpsTriggerLocalTimeUs,
-        };
-
-        if (DjiTest_TimeSyncRegHandler(&testTimeSyncHandler) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-            USER_LOG_ERROR("regsiter time sync handler error");
-        }
-
-        if (DjiTest_TimeSyncStartService() != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-            USER_LOG_ERROR("psdk time sync init error");
-        }
-
-    #endif
-
-    #if CONFIG_MODULE_SAMPLE_POSITIONING_ON
-            if (DjiTest_PositioningStartService() != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-                USER_LOG_ERROR("psdk positioning init error");
-            }
-    #endif
-
 
     /*!< Step 5: Tell the DJI Pilot you are ready. */
     returnCode = DjiCore_ApplicationStart();
@@ -818,3 +798,5 @@ static void DjiUser_NormalExitHandler(int signalNum)
 #pragma GCC diagnostic pop
 
 /****************** (C) COPYRIGHT DJI Innovations *****END OF FILE****/
+
+

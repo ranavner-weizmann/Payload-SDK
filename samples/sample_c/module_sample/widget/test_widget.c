@@ -53,6 +53,12 @@ static T_DjiReturnCode DjiTestWidget_GetWidgetValue(E_DjiWidgetType widgetType, 
 
 /* Private values ------------------------------------------------------------*/
 static T_DjiTaskHandle s_widgetTestThread;
+
+static bool s_isCsvFilePathConfigured = false;
+static char s_csvFilePath[WIDGET_DIR_PATH_LEN_MAX] = {0};
+
+
+
 static bool s_isWidgetFileDirPathConfigured = false;
 static char s_widgetFileDirPath[DJI_FILE_PATH_SIZE_MAX] = {0};
 static T_DjiTestWidgetLog s_djiTestWidgetLog[WIDGET_LOG_LINE_MAX_NUM] = {0};
@@ -208,6 +214,16 @@ T_DjiReturnCode DjiTest_WidgetSetConfigFilePath(const char *path)
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
+T_DjiReturnCode DjiTest_WidgetSetCsvFilePath(const char *path)
+{
+    memset(s_csvFilePath, 0, sizeof(s_csvFilePath));
+    memcpy(s_csvFilePath, path, USER_UTIL_MIN(strlen(path), sizeof(s_csvFilePath) - 1));
+    s_isCsvFilePathConfigured = true;
+
+    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+}
+
+
 #ifndef __CC_ARM
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-noreturn"
@@ -217,21 +233,48 @@ T_DjiReturnCode DjiTest_WidgetSetConfigFilePath(const char *path)
 void *DjiTest_WidgetTask(void *arg)
 {
     char message[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
-    uint32_t sysTimeMs = 0;
+    char lastLine[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
     T_DjiReturnCode djiStat;
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
 
     USER_UTIL_UNUSED(arg);
 
     while (1) {
-        djiStat = osalHandler->GetTimeMs(&sysTimeMs);
-        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-            USER_LOG_ERROR("Get system time ms error, stat = 0x%08llX", djiStat);
+        /* --- read last line from CSV, if path configured --- */
+        memset(lastLine, 0, sizeof(lastLine));
+
+        if (s_isCsvFilePathConfigured) {
+            FILE *fp = fopen(s_csvFilePath, "r");
+            if (fp != NULL) {
+                char buf[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
+
+                while (fgets(buf, sizeof(buf), fp) != NULL) {
+                    /* keep overwriting; when loop ends, buf holds last line */
+                    strncpy(lastLine, buf, sizeof(lastLine) - 1);
+                    lastLine[sizeof(lastLine) - 1] = '\0';
+                }
+
+                fclose(fp);
+
+                /* strip trailing newline(s) */
+                size_t len = strlen(lastLine);
+                while (len > 0 &&
+                       (lastLine[len - 1] == '\n' || lastLine[len - 1] == '\r')) {
+                    lastLine[--len] = '\0';
+                }
+            } else {
+                snprintf(lastLine, sizeof(lastLine),
+                         "Cannot open CSV: %s", s_csvFilePath);
+            }
+        } else {
+            snprintf(lastLine, sizeof(lastLine),
+                     "CSV path not set");
         }
 
+        /* --- compose floating-window message --- */
         snprintf(message, DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN,
-                 "System time : %ld ms \r\n%s \r\n%s \r\n%s \r\n%s \r\n",
-                 sysTimeMs,
+                 "%s\r\n%s\r\n%s\r\n%s\r\n%s\r\n",
+                 lastLine,
                  s_djiTestWidgetLog[0].content,
                  s_djiTestWidgetLog[1].content,
                  s_djiTestWidgetLog[2].content,
@@ -242,9 +285,10 @@ void *DjiTest_WidgetTask(void *arg)
             USER_LOG_ERROR("Floating window show message error, stat = 0x%08llX", djiStat);
         }
 
-        osalHandler->TaskSleepMs(200);
+        osalHandler->TaskSleepMs(2000);
     }
 }
+
 #ifndef __CC_ARM
 #pragma GCC diagnostic pop
 #endif
