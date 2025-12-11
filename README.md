@@ -1,8 +1,8 @@
 # DJI Payload SDK (PSDK)
 
-![](https://img.shields.io/badge/version-V3.14.0-pink.svg)
-![](https://img.shields.io/badge/platform-linux_|_rtos-orange.svg)
-![](https://img.shields.io/badge/license-MIT-blue.svg)
+![](https://img.shields.io/badge/version-V3.15.0-red.svg)
+![](https://img.shields.io/badge/platform-linux_|_rtos-yellow.svg)
+![](https://img.shields.io/badge/license-MIT-purple.svg)
 
 ## What is the DJI Payload SDK?
 
@@ -23,19 +23,12 @@ to get the latest version information.
 
 ## Latest Release
 
-The latest release version of PSDK is 3.14.0. This version of Payload SDK mainly add some new features support and fixed some
+The latest release version of PSDK is 3.15.0. This version of Payload SDK mainly add some new features support and fixed some
 bugs. Please refer to the release notes for detailed changes list.
 
-### Release Feature List
-- **Added support for the Zenmuse L3 model**
-- **Added custom network RTK functionality**
-- **Added support for using the L2 camera with the M400 drone**
-- **Added long-distance flight marking functionality for the M400 drone**
-- **Added support for modifying startup apps for the M400 drone**
-- **Added documentation for the M400 software license**
-
-### Fixes and Optimizations
-- **Optimized support for using the onboard network with the M400 drone**
+* Added Manifold 3 support for Matrice 4E/4T with basic and advanced features.
+* Added Manifold 3 support for Matrice 4D/4TD (Pilot version) with basic and advanced features.
+* Fixed Matrice 400 streaming display glitch when paired with SkyPort V2/X-Port. Resolved after updating Matrice 400 firmware.
 
 ## License
 

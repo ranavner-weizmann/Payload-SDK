@@ -31,6 +31,7 @@
 #include <math.h>
 #include <widget_interaction_test/test_widget_interaction.h>
 #include <dji_aircraft_info.h>
+#include "dji_fts.h"
 /* Private constants ---------------------------------------------------------*/
 
 /* Private types -------------------------------------------------------------*/
@@ -45,6 +46,7 @@ static const double s_earthCenter = 6378137.0;
 static const double s_degToRad = 0.01745329252;
 static bool s_isFtsCallbackRegistered = false;
 static int32_t s_ftsTriggerCount = 0;
+static uint8_t s_mission_state_machine = 0;
 
 static const T_DjiTestFlightControlDisplayModeStr s_flightControlDisplayModeStr[] = {
     {.displayMode = DJI_FC_SUBSCRIPTION_DISPLAY_MODE_ATTITUDE, .displayModeStr = "attitude mode"},
@@ -895,7 +897,27 @@ void DjiTest_FlightControlSetGetPerceptionParamSample()
 {
     T_DjiReturnCode returnCode;
     uint16_t exit_reason;
+    T_DjiAircraftInfoBaseInfo aircraftInfoBaseInfo;
 
+    returnCode = DjiAircraftInfo_GetBaseInfo(&aircraftInfoBaseInfo);
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("get aircraft base info error");
+        return;
+    }
+
+    switch (aircraftInfoBaseInfo.aircraftType)
+    {
+        case DJI_AIRCRAFT_TYPE_M4T:
+        case DJI_AIRCRAFT_TYPE_M4E:
+        case DJI_AIRCRAFT_TYPE_M4D:
+        case DJI_AIRCRAFT_TYPE_M4TD:
+        case DJI_AIRCRAFT_TYPE_M400:
+            break;
+
+        default:
+            USER_LOG_WARN("aircraft type %d not support", aircraftInfoBaseInfo.aircraftType);
+            return;
+    }
     USER_LOG_INFO("Flight control set-get-perception-param sample start");
     DjiTest_WidgetLogAppend("Flight control set-get-perception-param sample start");
 
@@ -916,11 +938,11 @@ void DjiTest_FlightControlSetGetPerceptionParamSample()
     };
     s_osalHandler->TaskSleepMs(1000);
 
-    USER_LOG_INFO("--> Step 3: DjiFlightController_SetRetardedHeigh");
-    DjiTest_WidgetLogAppend("--> Step 3: DjiFlightController_SetRetardedHeigh");
-    returnCode = DjiFlightController_SetRetardedHeigh(100.0f);
+    USER_LOG_INFO("--> Step 3: DjiFlightController_SetMinFlightHeight");
+    DjiTest_WidgetLogAppend("--> Step 3: DjiFlightController_SetMinFlightHeight");
+    returnCode = DjiFlightController_SetMinFlightHeight(50.0f);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("DjiFlightController_SetRetardedHeigh failed, error code: 0x%08X", returnCode);
+        USER_LOG_ERROR("DjiFlightController_SetMinFlightHeight failed, error code: 0x%08X", returnCode);
     };
     s_osalHandler->TaskSleepMs(1000);
 
@@ -941,13 +963,15 @@ out:
 
 T_DjiReturnCode DjiTest_FlightControlOpenMisInfoCallback(T_DjiFlightControllerOpenMis eventData)
 {
-    USER_LOG_INFO("DjiTest_FlightControlOpenMisInfoCallback");
+    s_mission_state_machine = eventData.mission_state_machine;
+    USER_LOG_INFO("OpenMisInfoCallback state_machine = %d, planning_algo = %d, goal_index = %d, distance_remaining = %f, time_remaining = %f, soe_remaining = %d",
+                  eventData.mission_state_machine, eventData.mission_planning_algo, eventData.goal_index,
+                  eventData.distance_remaining, eventData.time_remaining, eventData.soe_remaining);
 }
 
 T_DjiReturnCode DjiTest_FlightControlCoreTrajCallback(T_DjiFlightControllerCoreTraj eventData)
 {
-    USER_LOG_INFO("DjiTest_FlightControlCoreTrajCallback");
-    USER_LOG_INFO("code_name = %d, point_num = %d, byte_per_point = %d",
+    USER_LOG_INFO("DjiTest_FlightControlCoreTrajCallback code_name = %d, point_num = %d, byte_per_point = %d",
                   eventData.code_name, eventData.point_num, eventData.byte_per_point);
 }
 void DjiTest_FlightControlSetModeStartMission()
@@ -955,24 +979,45 @@ void DjiTest_FlightControlSetModeStartMission()
     T_DjiReturnCode returnCode;
     T_DjiFlightControllerStartMissionReq req = {0};
     T_DjiFlightControllerStartMissionRsp rsp = {0};
+    T_DjiAircraftInfoBaseInfo aircraftInfoBaseInfo;
+
+    returnCode = DjiAircraftInfo_GetBaseInfo(&aircraftInfoBaseInfo);
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("get aircraft base info error");
+        return;
+    }
+
+    switch (aircraftInfoBaseInfo.aircraftType)
+    {
+        case DJI_AIRCRAFT_TYPE_M4T:
+        case DJI_AIRCRAFT_TYPE_M4E:
+        case DJI_AIRCRAFT_TYPE_M4D:
+        case DJI_AIRCRAFT_TYPE_M4TD:
+        case DJI_AIRCRAFT_TYPE_M400:
+            break;
+
+        default:
+            USER_LOG_WARN("aircraft type %d not support", aircraftInfoBaseInfo.aircraftType);
+            return;
+    }
 
     req.version = 1;
     req.operation = 0;
-    req.mea = 1.0f;
+    req.mea = 10.0f;
     req.fly_vel = 10;
     req.goal_num = 1;
-    req.cmd_mode_point_info->lat = 1.0;
-    req.cmd_mode_point_info->lon = 1.0;
-    req.cmd_mode_point_info->alt = 10.0;
+    req.cmd_mode_point_info->lat = 22.578111231;
+    req.cmd_mode_point_info->lon = 113.93696;
+    req.cmd_mode_point_info->alt = 50.0;
 
     USER_LOG_INFO("Flight control SetModeStartMission sample start");
     DjiTest_WidgetLogAppend("Flight control SetModeStartMission sample start");
 
-    returnCode = DjiFlightController_SetModeStartMossion(req, &rsp);
+    returnCode = DjiFlightController_SetModeStartMission(req, &rsp);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("DjiTest_FlightControlSetModeStartMission failed, error code: 0x%08X", returnCode);
     } else {
-        USER_LOG_INFO("DjiTest_FlightControlSetModeStartMossion success ret = %d", returnCode);
+        USER_LOG_INFO("DjiTest_FlightControlSetModeStartMission success ret = %d", returnCode);
     }
 
     USER_LOG_INFO("Flight control SetModeStartMission sample end");
@@ -988,6 +1033,17 @@ void DjiTest_FlightControlSetModeStartMission()
     USER_LOG_INFO("RegisterCoreTrajCallBack ret = %d", returnCode);
 
     s_osalHandler->TaskSleepMs(10000);
+
+    while (true) {
+        if (s_mission_state_machine == 0) {
+            USER_LOG_INFO("Mission is finished.");
+            break;
+        }
+        s_osalHandler->TaskSleepMs(1000);
+    }
+
+    DjiFlightController_AntiRegisterCoreTrajCallBack();
+    DjiFlightController_AntiRegisterOpenMisInfoCallBack();
     USER_LOG_INFO("Flight control register callback sample end");
     DjiTest_WidgetLogAppend("Flight control register callback sample end");
 
@@ -1820,18 +1876,18 @@ DjiTest_FlightControlJoystickCtrlAuthSwitchEventCallback(T_DjiFlightControllerJo
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
-static T_DjiReturnCode DjiTest_FlightControlSetFtsTrigger(E_DjiMountPosition position, const char* desc)
+static T_DjiReturnCode DjiTest_SetFtsTrigger(E_DjiMountPosition position, const char* desc)
 {
     T_DjiReturnCode djiStat;
     T_DjiFtsPwmEscTriggerStatus esc_status;
 
-    djiStat = DjiFlightController_SelectFtsPwmTrigger(position);
+    djiStat = DjiFts_SelectFtsPwmTrigger(position);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("select fts pwm trigger E-PORT error, error code: 0x%08X", djiStat);
         return djiStat;
     }
 
-    djiStat = DjiFlightController_GetFtsPwmTriggerStatus(&esc_status);
+    djiStat = DjiFts_GetFtsPwmTriggerStatus(&esc_status);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("get pwm trigger status error, error code: 0x%08X", djiStat);
         return djiStat;
@@ -1850,26 +1906,16 @@ static T_DjiReturnCode DjiTest_FlightControlSetFtsTrigger(E_DjiMountPosition pos
     return djiStat;
 }
 
-T_DjiReturnCode DjiTest_FlightControlFtsPwmTriggerSample(E_DjiMountPosition position, const char* port_name)
+T_DjiReturnCode DjiTest_FtsPwmTriggerSample(E_DjiMountPosition position, const char* port_name)
 {
     T_DjiReturnCode returnCode;
 
-    returnCode = DjiTest_FlightControlInit();
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Init flight Control sample failed,error code:0x%08llX", returnCode);
-        return returnCode;
-    }
-    returnCode = DjiTest_FlightControlSetFtsTrigger(position, port_name);
+    returnCode = DjiTest_SetFtsTrigger(position, port_name);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Test select %s fts pwm trigger failed", port_name);
         return returnCode;
     }
 
-    returnCode = DjiTest_FlightControlDeInit();
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Deinit Flight Control sample failed,error code:0x%08llX", returnCode);
-        return returnCode;
-    }
     return returnCode;
 }
 

@@ -42,7 +42,7 @@ extern "C" {
 
 /*!< Attention: Select your hardware connection mode here.
 * */
-#define CONFIG_HARDWARE_CONNECTION         DJI_USE_ONLY_UART
+#define CONFIG_HARDWARE_CONNECTION DJI_USE_UART_AND_NETWORK_DEVICE
 
 /*!< Attention: Select the sample you want to run here.
 * */
@@ -72,9 +72,13 @@ extern "C" {
 
 /*!< Attention: This function needs to be used together with mobile sdk mop sample.
 * */
-#define CONFIG_MODULE_SAMPLE_MOP_CHANNEL_ON                 false
+#define CONFIG_MODULE_SAMPLE_MOP_CHANNEL_ON false
 
 #define CONFIG_MODULE_SAMPLE_TETHERED_BATTERY_ON            true
+
+#define CONFIG_MODULE_SAMPLE_TIME_SYNC_ON                   false
+
+#define CONFIG_MODULE_SAMPLE_POSITIONING_ON                 false
 
 /* Exported types ------------------------------------------------------------*/
 

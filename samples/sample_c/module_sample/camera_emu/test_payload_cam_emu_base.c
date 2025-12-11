@@ -34,6 +34,7 @@
 #include "dji_xport.h"
 #include "gimbal_emu/test_payload_gimbal_emu.h"
 #include <widget_interaction_test/test_widget_interaction.h>
+#include "test_raspberry_pi_camera.h"
 
 /* Private constants ---------------------------------------------------------*/
 #define PAYLOAD_CAMERA_EMU_TASK_FREQ            (100)
@@ -240,6 +241,10 @@ static T_DjiReturnCode StartRecordVideo(void)
     USER_LOG_INFO("start record video");
     DjiTest_WidgetLogAppend("start record video");
 
+#if USE_RASPBERRY_PI_CAMERA
+    DjiTest_RaspberryPiRecordingAction(true);
+#endif
+
 out:
     djiStat = osalHandler->MutexUnlock(s_commonMutex);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
@@ -272,6 +277,10 @@ static T_DjiReturnCode StopRecordVideo(void)
     s_cameraState.currentVideoRecordingTimeInSeconds = 0;
     USER_LOG_INFO("stop record video");
     DjiTest_WidgetLogAppend("stop record video");
+
+#if USE_RASPBERRY_PI_CAMERA
+    DjiTest_RaspberryPiRecordingAction(false);
+#endif
 
 out:
     djiStat = osalHandler->MutexUnlock(s_commonMutex);
@@ -314,6 +323,16 @@ static T_DjiReturnCode StartShootPhoto(void)
         USER_LOG_ERROR("unlock mutex error: 0x%08llX.", returnCode);
         return returnCode;
     }
+
+#if USE_RASPBERRY_PI_CAMERA
+if(s_cameraShootPhotoMode == DJI_CAMERA_SHOOT_PHOTO_MODE_SINGLE) {
+    DjiTest_RaspberryPiCameraTakePhoto();
+} else if(s_cameraShootPhotoMode == DJI_CAMERA_SHOOT_PHOTO_MODE_BURST) {
+    for(uint8_t i = 0; i < s_cameraBurstCount; i++) {
+        DjiTest_RaspberryPiCameraTakePhoto();
+    }
+}
+#endif
 
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
@@ -1220,6 +1239,15 @@ out:
                     s_cameraState.currentPhotoShootingIntervalTimeInSeconds = s_cameraPhotoTimeIntervalSettings.timeIntervalSeconds;
                     s_cameraState.currentPhotoShootingIntervalTimeInMs = s_cameraPhotoTimeIntervalSettings.timeIntervalMilliseconds;
                     if (s_cameraState.currentPhotoShootingIntervalCount < INTERVAL_PHOTOGRAPH_ALWAYS_COUNT) {
+#if USE_RASPBERRY_PI_CAMERA
+                        DjiTest_RaspberryPiCameraTakePhoto();
+#endif
+                        DjiTest_WidgetLogAppend("interval taking photo count:%d interval:%d.%ds",
+                                      (s_cameraPhotoTimeIntervalSettings.captureCount -
+                                       s_cameraState.currentPhotoShootingIntervalCount + 1),
+                                      s_cameraPhotoTimeIntervalSettings.timeIntervalSeconds,
+                                      s_cameraPhotoTimeIntervalSettings.timeIntervalMilliseconds / 100);
+
                         USER_LOG_INFO("interval taking photograph count:%d interval_time:%d.%ds",
                                       (s_cameraPhotoTimeIntervalSettings.captureCount -
                                        s_cameraState.currentPhotoShootingIntervalCount + 1),
@@ -1232,6 +1260,12 @@ out:
                             s_cameraState.isShootingIntervalStart = false;
                         }
                     } else {
+#if USE_RASPBERRY_PI_CAMERA
+                        DjiTest_RaspberryPiCameraTakePhoto();
+#endif
+                        DjiTest_WidgetLogAppend("interval taking photo always, interval:%d.%ds",
+                                      s_cameraPhotoTimeIntervalSettings.timeIntervalSeconds,
+                                      s_cameraPhotoTimeIntervalSettings.timeIntervalMilliseconds / 100);
                         USER_LOG_INFO("interval taking photograph always, interval_time:%d.%ds",
                                       s_cameraPhotoTimeIntervalSettings.timeIntervalSeconds,
                                       s_cameraPhotoTimeIntervalSettings.timeIntervalMilliseconds / 100);

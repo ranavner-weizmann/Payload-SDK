@@ -1,7 +1,7 @@
 /**
  ********************************************************************
- * @file    dji_version.h
- * @brief   This is the header file for "dji_version.c", defining the structure and
+ * @file    test_raspberry_pi_camera.h
+ * @brief   This is the header file for "test_raspberry_pi_camera.c", defining the structure and
  * (exported) function prototypes.
  *
  * @copyright (c) 2021 DJI. All rights reserved.
@@ -24,28 +24,29 @@
  */
 
 /* Define to prevent recursive inclusion -------------------------------------*/
-#ifndef DJI_VERSION_H
-#define DJI_VERSION_H
+#ifndef TEST_RASPBERRY_PI_CAMERA_H
+#define TEST_RASPBERRY_PI_CAMERA_H
 
 /* Includes ------------------------------------------------------------------*/
+#include "dji_typedef.h"
+#include "dji_payload_camera.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* Exported constants --------------------------------------------------------*/
-#define DJI_VERSION_MAJOR   3   /*!< DJI SDK major version num, when have incompatible API changes. Range from 0 to 99. */
-#define DJI_VERSION_MINOR   15  /*!< DJI SDK minor version num, when add functionality in a backwards compatible manner changes. Range from 0 to 99. */
-#define DJI_VERSION_MODIFY  0   /*!< DJI SDK modify version num, when have backwards compatible bug fixes changes. Range from 0 to 99. */
-#define DJI_VERSION_BETA    0   /*!< DJI SDK version beta info, release version will be 0, when beta version release changes. Range from 0 to 255. */
-#define DJI_VERSION_BUILD   2318 /*!< DJI SDK version build info, when jenkins trigger build changes. Range from 0 to 65535. */
-
+#define USE_RASPBERRY_PI_CAMERA 0
 /* Exported types ------------------------------------------------------------*/
 
 /* Exported functions --------------------------------------------------------*/
+T_DjiReturnCode DjiTest_RaspberryPiCameraInit();
+void DjiTest_RaspberryPiCameraTakePhoto();
+void DjiTest_RaspberryPiRecordingAction(bool action);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // DJI_VERSION_H
+#endif // TEST_RASPBERRY_PI_CAMERA_H
 /************************ (C) COPYRIGHT DJI Innovations *******END OF FILE******/

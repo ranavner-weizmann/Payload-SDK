@@ -1,7 +1,9 @@
 /**
  ********************************************************************
- * @file    dji_version.h
- * @brief   This is the header file for "dji_version.c", defining the structure and
+ * @file    pps.h
+ * @version V2.0.0
+ * @date    2019/9/20
+ * @brief   This is the header file for "pps.c", defining the structure and
  * (exported) function prototypes.
  *
  * @copyright (c) 2021 DJI. All rights reserved.
@@ -24,28 +26,27 @@
  */
 
 /* Define to prevent recursive inclusion -------------------------------------*/
-#ifndef DJI_VERSION_H
-#define DJI_VERSION_H
+#ifndef RSP_PPS_H
+#define RSP_PPS_H
 
 /* Includes ------------------------------------------------------------------*/
+#include "dji_typedef.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* Exported constants --------------------------------------------------------*/
-#define DJI_VERSION_MAJOR   3   /*!< DJI SDK major version num, when have incompatible API changes. Range from 0 to 99. */
-#define DJI_VERSION_MINOR   15  /*!< DJI SDK minor version num, when add functionality in a backwards compatible manner changes. Range from 0 to 99. */
-#define DJI_VERSION_MODIFY  0   /*!< DJI SDK modify version num, when have backwards compatible bug fixes changes. Range from 0 to 99. */
-#define DJI_VERSION_BETA    0   /*!< DJI SDK version beta info, release version will be 0, when beta version release changes. Range from 0 to 255. */
-#define DJI_VERSION_BUILD   2318 /*!< DJI SDK version build info, when jenkins trigger build changes. Range from 0 to 65535. */
 
 /* Exported types ------------------------------------------------------------*/
 
 /* Exported functions --------------------------------------------------------*/
+T_DjiReturnCode DjiTestRsp_GetNewestPpsTriggerLocalTimeUs(uint64_t *localTimeUs);
+T_DjiReturnCode DjiTestRsp_PpsSignalResponseInit(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // DJI_VERSION_H
+#endif // PPS_H
 /************************ (C) COPYRIGHT DJI Innovations *******END OF FILE******/

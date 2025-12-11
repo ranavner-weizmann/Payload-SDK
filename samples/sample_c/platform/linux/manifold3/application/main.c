@@ -203,11 +203,9 @@ int main(int argc, char **argv)
 #endif
 
 #ifdef CONFIG_MODULE_SAMPLE_DATA_TRANSMISSION_ON
-    if(aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M400) {
-        returnCode = DjiTest_DataTransmissionStartService();
-        if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-            USER_LOG_ERROR("data tramsmission sample init error");
-        }
+    returnCode = DjiTest_DataTransmissionStartService();
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("data tramsmission sample init error");
     }
 #endif
 
@@ -233,7 +231,12 @@ int main(int argc, char **argv)
 #endif
 
 #ifdef CONFIG_MODULE_SAMPLE_CLOUD_API_ON
-    if(aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M400) {
+    if(aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M400
+        || aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M4D
+        || aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M4TD
+        || aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M4T
+        || aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M4E
+    ) {
         returnCode = DjiTest_CloudApiByWebSocketStartService();
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("CloudApiByWebSocket send data sample start error");
@@ -250,6 +253,18 @@ int main(int argc, char **argv)
 
 #ifdef CONFIG_MODULE_SAMPLE_MOP_CHANNEL_ON
     if(aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M400) {
+        USER_LOG_INFO("DjiTest_MopChannelStartService();");
+        returnCode = DjiTest_MopChannelStartService();
+        if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("mop channel sample init error");
+        }
+    }
+    if(aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M4D
+        || aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M4TD
+        || aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M4T
+        || aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M4E
+    ) {
+        sleep(2);
         USER_LOG_INFO("DjiTest_MopChannelStartService();");
         returnCode = DjiTest_MopChannelStartService();
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
@@ -480,7 +495,7 @@ static T_DjiReturnCode DjiUser_LocalWriteFsInit(const char *path)
     }
 
     if (access(DJI_LOG_FOLDER_NAME, F_OK) != 0) {
-        sprintf(folderName, "mkdir %s", DJI_LOG_FOLDER_NAME);
+        sprintf(folderName, "mkdir -p %s", DJI_LOG_FOLDER_NAME);
         ret = system(folderName);
         if (ret != 0) {
             return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;

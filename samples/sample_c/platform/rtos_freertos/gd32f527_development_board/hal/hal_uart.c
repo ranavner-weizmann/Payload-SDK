@@ -30,10 +30,11 @@
 #include "usb_device.h"
 #include "uart.h"
 #include "cdc_acm_core.h"
+#include "FreeRTOS.h"
 
 /* Private constants ---------------------------------------------------------*/
 #define COMMUNICATION_UART_NUM          UART_NUM_1
-#define USE_NATIVE_UART_ON_EPORT_V2     (0)
+#define USE_NATIVE_UART_ON_EPORT_V2 (1)
 
 #define USB_UART_FT232_VID              (0x0403)
 #define USB_UART_FT232_PID              (0x6001)

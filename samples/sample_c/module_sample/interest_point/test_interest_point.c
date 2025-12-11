@@ -67,7 +67,7 @@ T_DjiReturnCode DjiTest_InterestPointRunSample(void)
     returnCode = DjiInterestPoint_Init();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Point interest init failed, errno=%lld", returnCode);
-        return returnCode;
+        goto controller_deinit;
     }
 
     osalHandler->TaskSleepMs(1000);
@@ -88,7 +88,7 @@ T_DjiReturnCode DjiTest_InterestPointRunSample(void)
     returnCode = DjiInterestPoint_RegMissionStateCallback(DjiUser_InterestPointMissionStateCallback);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Register mission state callback failed, errno=%lld", returnCode);
-        return returnCode;
+        goto point_deinit;
     }
 
     if (aircraftInfoBaseInfo.aircraftSeries == DJI_AIRCRAFT_SERIES_M400) {
@@ -101,7 +101,7 @@ T_DjiReturnCode DjiTest_InterestPointRunSample(void)
     returnCode = DjiInterestPoint_Start(interestPointSettings);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Point interest start failed, errno=%lld", returnCode);
-        return returnCode;
+        goto point_deinit;
     }
 
     osalHandler->TaskSleepMs(1000);
@@ -118,25 +118,24 @@ T_DjiReturnCode DjiTest_InterestPointRunSample(void)
     returnCode = DjiInterestPoint_Stop();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Point interest stop failed, errno=%lld", returnCode);
-        return returnCode;
     }
 
+point_deinit:
     USER_LOG_INFO("Force landing");
     DjiFlightController_StartForceLanding();
 
     returnCode = DjiInterestPoint_DeInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Point interest deinit failed, errno=%lld", returnCode);
-        return returnCode;
     }
 
+controller_deinit:
     returnCode = DjiFlightController_DeInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Flight control init failed, errno=%lld", returnCode);
-        return returnCode;
     }
 
-    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+    return returnCode;
 }
 
 /* Private functions definition-----------------------------------------------*/

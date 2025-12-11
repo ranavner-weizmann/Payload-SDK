@@ -960,6 +960,11 @@
 </File>
 <File>
 <FileType>5</FileType>
+<FileName>dji_fts.h</FileName>
+<FilePath>..\..\..\..\..\..\..\psdk_lib\include\dji_fts.h</FilePath>
+</File>
+<File>
+<FileType>5</FileType>
 <FileName>dji_gimbal.h</FileName>
 <FilePath>..\..\..\..\..\..\..\psdk_lib\include\dji_gimbal.h</FilePath>
 </File>

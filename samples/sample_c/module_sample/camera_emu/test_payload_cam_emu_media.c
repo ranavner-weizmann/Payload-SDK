@@ -36,6 +36,7 @@
 #include "camera_emu/dji_media_file_manage/dji_media_file_core.h"
 #include "dji_high_speed_data_channel.h"
 #include "dji_aircraft_info.h"
+#include "test_raspberry_pi_camera.h"
 
 /* Private constants ---------------------------------------------------------*/
 #define FFMPEG_CMD_BUF_SIZE                 (256 + 256)
@@ -209,6 +210,13 @@ T_DjiReturnCode DjiTest_CameraEmuMediaStartService(void)
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
+#if USE_RASPBERRY_PI_CAMERA
+    returnCode = DjiTest_RaspberryPiCameraInit();
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("start raspberry pi camera error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    }
+#else
     if (DjiPlatform_GetHalNetworkHandler() != NULL || DjiPlatform_GetHalUsbBulkHandler() != NULL) {
         returnCode = osalHandler->TaskCreate("user_camera_media_task", UserCameraMedia_SendVideoTask, 2048,
                                              NULL, &s_userSendVideoThread);
@@ -217,6 +225,7 @@ T_DjiReturnCode DjiTest_CameraEmuMediaStartService(void)
             return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
         }
     }
+#endif
 
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }

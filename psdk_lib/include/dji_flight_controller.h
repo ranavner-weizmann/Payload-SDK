@@ -285,66 +285,61 @@ typedef struct {
 
 typedef struct
 {
-    double lat;
-    double lon;
-    float alt;
+    double lat; /*!< Target point latitude, unit: rad */
+    double lon; /*!< Target point longitude, unit: rad */
+    float alt;  /*!< Target point altitude, ellipsoidal height unit: meters */
 } T_DjiFlightControllerPointInfo;
 
 typedef struct
 {
-    uint8_t version;
-    int8_t operation;
-    float mea;
-    uint8_t fly_vel;
-    uint8_t goal_num;
-    T_DjiFlightControllerPointInfo cmd_mode_point_info[1];
+    uint8_t version; /*!< Function version */
+    int8_t operation; /*!< New upload of a target point or update of the current task's target point; 0: new order,  1: update goal */
+    float mea; /*!< Minimum enroute height, in meters, relative to the takeoff point.
+                If the aircraft has not started or is on the ground, it will first climb to this height before executing the task. This height is ignored if the aircraft is in the air. */
+    uint8_t fly_vel; /*!< Maximum horizontal flight speed to the target point, in meters per second */
+    uint8_t goal_num; /*!< Number of target points, currently only supports one point */
+    T_DjiFlightControllerPointInfo cmd_mode_point_info[1]; /*!< Information of the target point */
 } T_DjiFlightControllerStartMissionReq;
 
 typedef struct
 {
-    uint8_t ret_code;
-    uint16_t error_code;
-    uint8_t code_name;
+    uint8_t ret_code; /*!< 0: Start task successfully, 1: Start task failed */
+    uint16_t error_code; /*!< Instruction flight route version reused route error code */
+    uint8_t code_name; /*!< Task code, unique, will be included in the trajectory push to ensure that external modules can correlate the task with its trajectory */
 } T_DjiFlightControllerStartMissionRsp;
 
 typedef struct
 {
-    uint8_t mission_state_machine;
-    uint8_t mission_planning_algo;
-    uint8_t goal_index;
-    float distance_remaining;
-    float time_remaining;
-    uint8_t soe_remaining;
-    uint8_t progress;
-    uint8_t success_rate;
+    uint8_t mission_state_machine; /*!< Task state machine, 0 is idle, others are in progress.*/
+    uint8_t mission_planning_algo; /*!< Task planning algorithm mode */
+    uint8_t goal_index; /*!< Current target point index */
+    float distance_remaining; /*!< Remaining task distance */
+    float time_remaining; /*!< Remaining task time */
+    uint8_t soe_remaining; /*!< Required SOE (State of Energy) */
+    uint8_t progress; /*!< Progress, reserved unused */
+    uint8_t success_rate; /*!< Task success rate, reserved unused */
 } T_DjiFlightControllerOpenMis;
 
 typedef struct
 {
-    int32_t latitude;
-    int32_t longitude;
-    int32_t altitude;
+    int32_t latitude; /*!< GPS latitude, unit: 1/2^32 * 180°, range: [-90°, 90°) */
+    int32_t longitude; /*!< GPS longitude, unit: 1/2^32 * 360°, range: [-180°, 180°) */
+    int32_t altitude; /*!< Altitude, unit: mm; Note: The type of altitude depends on the function definition.
+                       It could be: relative to the takeoff point, WGS84 absolute ellipsoidal height, EGM96 absolute altitude, barometric height, etc. */
 } T_DjiFlightControllerSpotlightZoomGps;
 
 typedef struct
 {
-    uint8_t code_name;
-    uint8_t point_num;
-    uint8_t byte_per_point;
-    T_DjiFlightControllerSpotlightZoomGps points[1];
-    uint8_t last_point_type;
+    uint8_t code_name; /*!< Unique task code for this trajectory push */
+    uint8_t point_num; /*!< Number of key points in the trajectory */
+    uint8_t byte_per_point; /*!< Number of bytes per point */
+    T_DjiFlightControllerSpotlightZoomGps points[1]; /*!< Array of key points in the trajectory */
+    uint8_t last_point_type; /*!< Whether the target point can be reached
+                              0: Yes, the last point in the trajectory is the user's target point
+                              1: No, the user's target point is in an invalid area (e.g., within an NFZ or building), the last point is the closest point to the target */
 } T_DjiFlightControllerCoreTraj;
+
 #pragma pack()
-
-typedef struct {
-    E_DjiMountPosition fts_select;
-    E_DjiFlightControllerFtsStatus fts_status;
-    uint8_t fts_pwm_cnt; /* correct number of PWM signals received */
-} T_DjiFtsPwmTriggerStatus;
-
-typedef struct {
-    T_DjiFtsPwmTriggerStatus ESC[4]; /* trigger status of the two ESCs */
-} T_DjiFtsPwmEscTriggerStatus;
 
 /* Exported functions --------------------------------------------------------*/
 /**
@@ -362,24 +357,24 @@ T_DjiReturnCode DjiFlightController_DeInit(void);
 
 /**
  * @brief Set planning algorithm.
- * @param algo: 0:smart height, 1:Manual height".
+ * @param algo: 0:smart height, 1:Manual height.
  * @return Execution result.
  */
 T_DjiReturnCode DjiFlightController_SetPlanningAlgo(uint8_t algo);
 
 /**
  * @brief Set max velocity.
- * @param value: max velocity value, min:1, max:15".
+ * @param value: max velocity value, min:1, max:15.
  * @return Execution result.
 */
 T_DjiReturnCode DjiFlightController_SetMaxVelocity(uint8_t value);
 
 /**
- * @brief Set retarded height.
- * @param value: retarded height value, min:1.0, max:3000.0".
+ * @brief Set min flight height.
+ * @param value: min flight height value, min:1.0, max:3000.0, only SetPlanningAlgo 1 effective.
  * @return Execution result.
 */
-T_DjiReturnCode DjiFlightController_SetRetardedHeigh(float value);
+T_DjiReturnCode DjiFlightController_SetMinFlightHeight(float value);
 
 /**
  * @brief Get exit reason.
@@ -415,12 +410,24 @@ T_DjiReturnCode DjiFlightController_RegisterOpenMisInfoCallBack(FcCmderModeOpenM
 T_DjiReturnCode DjiFlightController_RegisterCoreTrajCallBack(FcCmderModeCoreTrajEventCbFunc callback);
 
 /**
- * @brief set mode start mossion.
+ * @brief antiregister callback function for the open mis event.
+ * @return Execution result.
+ */
+T_DjiReturnCode DjiFlightController_AntiRegisterOpenMisInfoCallBack(void);
+
+/**
+ * @brief antiregister callback function for the core traj event.
+ * @return Execution result.
+ */
+T_DjiReturnCode DjiFlightController_AntiRegisterCoreTrajCallBack(void);
+
+/**
+ * @brief set mode start mission.
  * @param command: cmd for start mission.
  * @param rsp: response data for set start mission.
  * @return Execution result.
  */
-T_DjiReturnCode DjiFlightController_SetModeStartMossion(T_DjiFlightControllerStartMissionReq command,
+T_DjiReturnCode DjiFlightController_SetModeStartMission(T_DjiFlightControllerStartMissionReq command,
                                                        T_DjiFlightControllerStartMissionRsp *rsp);
 
 /**
@@ -802,20 +809,6 @@ T_DjiReturnCode DjiFlightController_StopSlowRotateMotor(void);
  * @return Execution result.
  */
 T_DjiReturnCode DjiFlightController_GetElectronicSpeedControllerStatus(E_DjiFlightControllerElectronicSpeedControllerStatus *status);
-
-/**
- * @brief Select Fts pwm trigger.
- * @param position: Pwm trigger source position. M4/M4T/M4D/M4TD: support DJI_MOUNT_POSITION_EXTENSION_PORT or DJI_MOUNT_POSITION_EXTENSION_LITE_PORT,
- *  M400: only support DJI_MOUNT_POSITION_EXTENSION_PORT_V2_NO4
- * @return Execution result.
- */
-T_DjiReturnCode DjiFlightController_SelectFtsPwmTrigger(E_DjiMountPosition position);
-
-/**
- * @brief Get Fts pwm trigger status.
- * @return Execution result.
- */
-T_DjiReturnCode DjiFlightController_GetFtsPwmTriggerStatus(T_DjiFtsPwmEscTriggerStatus* trigger_status);
 
 #ifdef __cplusplus
 }

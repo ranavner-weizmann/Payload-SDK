@@ -1667,7 +1667,8 @@ T_DjiReturnCode DjiTest_CameraManagerRunSample(E_DjiMountPosition mountPosition,
 
             if (cameraType != DJI_CAMERA_TYPE_Z30) {
                 returnCode = DjiCameraManager_GetFocusRingValue(mountPosition, &focusRingValue);
-                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS
+                    && returnCode != DJI_ERROR_CAMERA_MANAGER_MODULE_CODE_UNSUPPORTED_COMMAND) {
                     USER_LOG_ERROR("Get camera focus ring value at position %d failed", mountPosition);
                     goto exitCameraModule;
                 }
@@ -1910,7 +1911,7 @@ T_DjiReturnCode DjiTest_CameraManagerRunSample(E_DjiMountPosition mountPosition,
                 dji_f32_t inputXFloat, inputYFloat;
                 dji_f32_t getXFloat, getYFloat;
 
-                printf("Input nomorlized meterting point (x, y) you want to set: ");
+                printf("Input nomorlized meterting point, range: 0.0 ~ 1.0 (x, y)  you want to set: ");
                 scanf("%f %f", &inputXFloat, &inputYFloat);
 
                 USER_LOG_INFO("Try to set metering point as (%f, %f)", inputXFloat, inputYFloat);
@@ -1974,7 +1975,8 @@ T_DjiReturnCode DjiTest_CameraManagerRunSample(E_DjiMountPosition mountPosition,
                 cameraType == DJI_CAMERA_TYPE_M3E || cameraType == DJI_CAMERA_TYPE_M3D ||
                 cameraType == DJI_CAMERA_TYPE_L2 || cameraType == DJI_CAMERA_TYPE_H30 ||
                 cameraType == DJI_CAMERA_TYPE_M4TD || cameraType == DJI_CAMERA_TYPE_M4D ||
-                cameraType == DJI_CAMERA_TYPE_M4T || cameraType == DJI_CAMERA_TYPE_L3) {
+                cameraType == DJI_CAMERA_TYPE_M4T || cameraType == DJI_CAMERA_TYPE_L3 ||
+                cameraType == DJI_CAMERA_TYPE_M4E) {
                 USER_LOG_WARN("Camera type %s don't support FFC function.",
                               s_cameraTypeStrList[DjiTest_CameraManagerGetCameraTypeIndex(cameraType)].cameraTypeStr);
                 goto exitCameraModule;
@@ -2022,7 +2024,8 @@ T_DjiReturnCode DjiTest_CameraManagerRunSample(E_DjiMountPosition mountPosition,
                 cameraType == DJI_CAMERA_TYPE_M3E || cameraType == DJI_CAMERA_TYPE_M3D ||
                 cameraType == DJI_CAMERA_TYPE_L2 || cameraType == DJI_CAMERA_TYPE_H30 ||
                 cameraType == DJI_CAMERA_TYPE_M4TD || cameraType == DJI_CAMERA_TYPE_M4D ||
-                cameraType == DJI_CAMERA_TYPE_M4T || cameraType == DJI_CAMERA_TYPE_L3) {
+                cameraType == DJI_CAMERA_TYPE_M4T || cameraType == DJI_CAMERA_TYPE_L3 ||
+                cameraType == DJI_CAMERA_TYPE_M4E) {
                 USER_LOG_WARN("Camera type %s don't support infrared function.",
                               s_cameraTypeStrList[DjiTest_CameraManagerGetCameraTypeIndex(cameraType)].cameraTypeStr);
                 goto exitCameraModule;
@@ -2254,7 +2257,8 @@ static T_DjiReturnCode DjiTest_CameraManagerMediaDownloadAndDeleteMediaFile(E_Dj
             }
         }
 
-        if (s_meidaFileList.fileListInfo[0].type == DJI_CAMERA_FILE_TYPE_JPEG) {
+        if (s_meidaFileList.fileListInfo[0].type == DJI_CAMERA_FILE_TYPE_JPEG ||
+            s_meidaFileList.fileListInfo[0].type == DJI_CAMERA_FILE_TYPE_MP4) {
             USER_LOG_INFO("delete camera file of index %d", s_meidaFileList.fileListInfo[0].fileIndex);
             returnCode = DjiCameraManager_DeleteFileByIndex(position, s_meidaFileList.fileListInfo[0].fileIndex);
             if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {

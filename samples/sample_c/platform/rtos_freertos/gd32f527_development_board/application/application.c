@@ -37,7 +37,7 @@
 
 #include "application.h"
 #include "hal_uart.h"
-#include "hal_i2c.h"
+#include "../hal/hal_i2c.h"
 #include "osal.h"
 #include "dji_sdk_app_info.h"
 #include "dji_sdk_config.h"

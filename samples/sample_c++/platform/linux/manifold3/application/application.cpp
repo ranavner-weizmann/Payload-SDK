@@ -37,6 +37,7 @@
 #include "../common/osal/osal_socket.h"
 #include "../hal/hal_usb_bulk.h"
 #include "hms/test_hms.h"
+#include "power_management/test_power_management.h"
 
 /* Private constants ---------------------------------------------------------*/
 #define DJI_LOG_PATH                    "data/logs/DJI"
@@ -240,6 +241,11 @@ void Application::DjiUser_ApplicationStart()
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("DjiTest_HmsCustomizationStartService, error code:0x%08llX", returnCode);
         return;
+    }
+
+    returnCode = DjiTest_PowerManagementStartService();
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("power management init error");
     }
 
     returnCode = DjiCore_ApplicationStart();
