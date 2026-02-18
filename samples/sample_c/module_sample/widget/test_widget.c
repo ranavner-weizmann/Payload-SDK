@@ -13,7 +13,7 @@
  * material(s) incorporated within the information, in any form, is strictly
  * prohibited without the express written consent of DJI.
  *
- * If you receive this source code without DJI’s authorization, you may not
+ * If you receive this source code without DJI's authorization, you may not
  * further disseminate the information, and you must immediately remove the
  * source code and notify DJI of its removal. DJI reserves the right to pursue
  * legal actions against you for any loss(es) or damage(s) caused by your
@@ -231,62 +231,114 @@ T_DjiReturnCode DjiTest_WidgetSetCsvFilePath(const char *path)
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #pragma GCC diagnostic ignored "-Wformat"
 #endif
+
+/*
+ * DjiTest_WidgetTask
+ *
+ * Reads vitals.csv at 1 Hz, parses the last data line into its four fields
+ * (timestamp, temp, RH, pressure) and sends them as labeled items to the
+ * DJI Pilot 2 floating window.
+ *
+ * Expected CSV format (with optional header row):
+ *   timestamp,temp,RH,pressure
+ *   2026-02-18T10:30:00,23.5,61.2,1013.4
+ */
 void *DjiTest_WidgetTask(void *arg)
 {
     char message[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
-    char lastLine[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
     T_DjiReturnCode djiStat;
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
 
     USER_UTIL_UNUSED(arg);
 
     while (1) {
-        /* --- read last line from CSV, if path configured --- */
-        memset(lastLine, 0, sizeof(lastLine));
+        /* ----------------------------------------------------------------
+         * Step 1 — Read the last data line from the CSV
+         * ---------------------------------------------------------------- */
+        char timestamp[64] = "N/A";
+        float temp     = 0.0f;
+        float rh       = 0.0f;
+        float pressure = 0.0f;
+        bool  parsed   = false;
 
         if (s_isCsvFilePathConfigured) {
             FILE *fp = fopen(s_csvFilePath, "r");
             if (fp != NULL) {
-                char buf[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
+                char buf[256];
+                char lastDataLine[256] = {0};
 
                 while (fgets(buf, sizeof(buf), fp) != NULL) {
-                    /* keep overwriting; when loop ends, buf holds last line */
-                    strncpy(lastLine, buf, sizeof(lastLine) - 1);
-                    lastLine[sizeof(lastLine) - 1] = '\0';
+                    /* Skip header row: starts with a non-digit character
+                     * (e.g. "timestamp,temp,RH,pressure").
+                     * A data row always begins with a digit (year). */
+                    if (buf[0] >= '0' && buf[0] <= '9') {
+                        strncpy(lastDataLine, buf, sizeof(lastDataLine) - 1);
+                        lastDataLine[sizeof(lastDataLine) - 1] = '\0';
+                    }
                 }
-
                 fclose(fp);
 
-                /* strip trailing newline(s) */
-                size_t len = strlen(lastLine);
-                while (len > 0 &&
-                       (lastLine[len - 1] == '\n' || lastLine[len - 1] == '\r')) {
-                    lastLine[--len] = '\0';
+                if (lastDataLine[0] != '\0') {
+                    /* Strip trailing newline / carriage return */
+                    size_t len = strlen(lastDataLine);
+                    while (len > 0 &&
+                           (lastDataLine[len - 1] == '\n' ||
+                            lastDataLine[len - 1] == '\r')) {
+                        lastDataLine[--len] = '\0';
+                    }
+
+                    /* Parse: "timestamp,temp,RH,pressure"
+                     * %63[^,] reads everything up to the first comma. */
+                    char ts[64] = {0};
+                    float t = 0.0f, h = 0.0f, p = 0.0f;
+                    if (sscanf(lastDataLine, "%63[^,],%f,%f,%f",
+                               ts, &t, &h, &p) == 4) {
+                        strncpy(timestamp, ts, sizeof(timestamp) - 1);
+                        timestamp[sizeof(timestamp) - 1] = '\0';
+                        temp     = t;
+                        rh       = h;
+                        pressure = p;
+                        parsed   = true;
+                    } else {
+                        USER_LOG_WARN("CSV parse failed on line: %s", lastDataLine);
+                    }
                 }
             } else {
-                snprintf(lastLine, sizeof(lastLine),
-                         "Cannot open CSV: %s", s_csvFilePath);
+                USER_LOG_WARN("Cannot open CSV: %s", s_csvFilePath);
             }
-        } else {
-            snprintf(lastLine, sizeof(lastLine),
-                     "CSV path not set");
         }
 
-        /* --- compose floating-window message --- */
-        snprintf(message, DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN,
-                 "%s\r\n%s\r\n%s\r\n%s\r\n%s\r\n",
-                 lastLine,
-                 s_djiTestWidgetLog[0].content,
-                 s_djiTestWidgetLog[1].content,
-                 s_djiTestWidgetLog[2].content,
-                 s_djiTestWidgetLog[3].content);
+        /* ----------------------------------------------------------------
+         * Step 2 — Compose the floating-window message
+         * ---------------------------------------------------------------- */
+        if (parsed) {
+            snprintf(message, DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN,
+                     "=== Air Vitals ===\r\n"
+                     "Time    : %s\r\n"
+                     "Temp    : %.2f degC\r\n"
+                     "RH      : %.2f %%\r\n"
+                     "Pressure: %.2f hPa\r\n",
+                     timestamp, temp, rh, pressure);
+        } else {
+            snprintf(message, DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN,
+                     "=== Air Vitals ===\r\n"
+                     "Waiting for data...\r\n"
+                     "File: %s\r\n",
+                     s_isCsvFilePathConfigured ? s_csvFilePath : "(path not set)");
+        }
 
+        /* ----------------------------------------------------------------
+         * Step 3 — Send to DJI Pilot 2 floating window
+         * ---------------------------------------------------------------- */
         djiStat = DjiWidgetFloatingWindow_ShowMessage(message);
         if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("Floating window show message error, stat = 0x%08llX", djiStat);
         }
 
-        osalHandler->TaskSleepMs(2000);
+        /* ----------------------------------------------------------------
+         * Step 4 — Sleep 1000 ms → 1 Hz update rate
+         * ---------------------------------------------------------------- */
+        osalHandler->TaskSleepMs(1000);
     }
 }
 

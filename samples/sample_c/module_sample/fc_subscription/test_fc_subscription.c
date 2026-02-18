@@ -13,7 +13,7 @@
  * material(s) incorporated within the information, in any form, is strictly
  * prohibited without the express written consent of DJI.
  *
- * If you receive this source code without DJI’s authorization, you may not
+ * If you receive this source code without DJI's authorization, you may not
  * further disseminate the information, and you must immediately remove the
  * source code and notify DJI of its removal. DJI reserves the right to pursue
  * legal actions against you for any loss(es) or damage(s) caused by your
@@ -25,6 +25,9 @@
 /* Includes ------------------------------------------------------------------*/
 #include <utils/util_misc.h>
 #include <math.h>
+#include <stdio.h>
+#include <time.h>
+#include <string.h>
 #include "test_fc_subscription.h"
 #include "dji_logger.h"
 #include "dji_platform.h"
@@ -33,6 +36,16 @@
 /* Private constants ---------------------------------------------------------*/
 #define FC_SUBSCRIPTION_TASK_FREQ         (1)
 #define FC_SUBSCRIPTION_TASK_STACK_SIZE   (2048)
+#define FC_SUBSCRIPTION_CSV_PATH_MAX      (256)
+
+/*
+ * GPS position unit conversions:
+ *   gpsPosition.x = longitude  [1e-7 degrees]
+ *   gpsPosition.y = latitude   [1e-7 degrees]
+ *   gpsPosition.z = altitude   [mm above sea level]
+ */
+#define GPS_DEG_SCALE   (1.0e-7)   /* convert raw integer → decimal degrees */
+#define GPS_ALT_SCALE   (1.0e-3)   /* convert mm → metres                   */
 
 /* Private types -------------------------------------------------------------*/
 
@@ -40,27 +53,65 @@
 static void *UserFcSubscription_Task(void *arg);
 static T_DjiReturnCode DjiTest_FcSubscriptionReceiveQuaternionCallback(const uint8_t *data, uint16_t dataSize,
                                                                        const T_DjiDataTimestamp *timestamp);
+static void WriteCsvRow(FILE *fp,
+                        double lat, double lon, double alt,
+                        double pitch, double roll, double yaw);
+static bool CsvNeedsHeader(const char *path);
 
 /* Private variables ---------------------------------------------------------*/
 static T_DjiTaskHandle s_userFcSubscriptionThread;
-static bool s_userFcSubscriptionDataShow = false;
-static uint8_t s_totalSatelliteNumberUsed = 0;
-static uint32_t s_userFcSubscriptionDataCnt = 0;
+static bool            s_userFcSubscriptionDataShow = false;
+static uint8_t         s_totalSatelliteNumberUsed   = 0;
+static uint32_t        s_userFcSubscriptionDataCnt  = 0;
+
+/* Shared euler angles – written by quaternion callback, read by task.
+ * Access is protected by s_eulerMutex. */
+static T_DjiMutexHandle s_eulerMutex = {0};
+static double           s_pitch      = 0.0;
+static double           s_roll       = 0.0;
+static double           s_yaw        = 0.0;
+
+/* CSV output path (set via DjiTest_FcSubscriptionSetCsvOutputPath) */
+static bool s_isCsvOutputPathConfigured              = false;
+static char s_csvOutputPath[FC_SUBSCRIPTION_CSV_PATH_MAX] = {0};
 
 /* Exported functions definition ---------------------------------------------*/
+
+T_DjiReturnCode DjiTest_FcSubscriptionSetCsvOutputPath(const char *path)
+{
+    if (path == NULL) {
+        return DJI_ERROR_SYSTEM_MODULE_CODE_INVALID_PARAMETER;
+    }
+
+    memset(s_csvOutputPath, 0, sizeof(s_csvOutputPath));
+    memcpy(s_csvOutputPath, path,
+           USER_UTIL_MIN(strlen(path), sizeof(s_csvOutputPath) - 1));
+    s_isCsvOutputPathConfigured = true;
+
+    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+}
+
 T_DjiReturnCode DjiTest_FcSubscriptionStartService(void)
 {
-    T_DjiReturnCode djiStat;
-    T_DjiOsalHandler *osalHandler = NULL;
+    T_DjiReturnCode   djiStat;
+    T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
 
-    osalHandler = DjiPlatform_GetOsalHandler();
+    /* Create mutex that protects the shared euler-angle variables */
+    djiStat = osalHandler->MutexCreate(&s_eulerMutex);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Create euler mutex error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    }
+
     djiStat = DjiFcSubscription_Init();
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("init data subscription module error.");
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
-    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION, DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ,
+    /* Quaternion at 50 Hz — callback converts to pitch/roll/yaw */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ,
                                                DjiTest_FcSubscriptionReceiveQuaternionCallback);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic quaternion error.");
@@ -69,7 +120,9 @@ T_DjiReturnCode DjiTest_FcSubscriptionStartService(void)
         USER_LOG_DEBUG("Subscribe topic quaternion success.");
     }
 
-    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_VELOCITY, DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+    /* Velocity at 1 Hz — polled in task */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_VELOCITY,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
                                                NULL);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic velocity error.");
@@ -78,7 +131,9 @@ T_DjiReturnCode DjiTest_FcSubscriptionStartService(void)
         USER_LOG_DEBUG("Subscribe topic velocity success.");
     }
 
-    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION, DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+    /* GPS position at 1 Hz — polled in task */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
                                                NULL);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic gps position error.");
@@ -87,7 +142,9 @@ T_DjiReturnCode DjiTest_FcSubscriptionStartService(void)
         USER_LOG_DEBUG("Subscribe topic gps position success.");
     }
 
-    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_DETAILS, DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+    /* GPS details at 1 Hz — polled in task (satellite count) */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_DETAILS,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
                                                NULL);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic gps details error.");
@@ -97,7 +154,8 @@ T_DjiReturnCode DjiTest_FcSubscriptionStartService(void)
     }
 
     if (osalHandler->TaskCreate("user_subscription_task", UserFcSubscription_Task,
-                                FC_SUBSCRIPTION_TASK_STACK_SIZE, NULL, &s_userFcSubscriptionThread) !=
+                                FC_SUBSCRIPTION_TASK_STACK_SIZE, NULL,
+                                &s_userFcSubscriptionThread) !=
         DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("user data subscription task create error.");
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
@@ -126,21 +184,24 @@ T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void)
     }
 
     USER_LOG_INFO("--> Step 2: Subscribe the topics of quaternion, velocity and gps position");
-    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION, DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ,
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ,
                                                DjiTest_FcSubscriptionReceiveQuaternionCallback);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic quaternion error.");
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
-    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_VELOCITY, DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_VELOCITY,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
                                                NULL);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic velocity error.");
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
-    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION, DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
                                                NULL);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic gps position error.");
@@ -158,9 +219,9 @@ T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void)
         if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("get value of topic velocity error.");
         } else {
-            USER_LOG_INFO("velocity: x = %f y = %f z = %f healthFlag = %d, timestamp ms = %d us = %d.", velocity.data.x,
-                          velocity.data.y,
-                          velocity.data.z, velocity.health, timestamp.millisecond, timestamp.microsecond);
+            USER_LOG_INFO("velocity: x = %f y = %f z = %f healthFlag = %d, timestamp ms = %d us = %d.",
+                          velocity.data.x, velocity.data.y, velocity.data.z,
+                          velocity.health, timestamp.millisecond, timestamp.microsecond);
         }
 
         djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION,
@@ -170,11 +231,10 @@ T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void)
         if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("get value of topic gps position error.");
         } else {
-            USER_LOG_INFO("gps position: x = %d y = %d z = %d.", gpsPosition.x, gpsPosition.y, gpsPosition.z);
+            USER_LOG_INFO("gps position: x = %d y = %d z = %d.",
+                          gpsPosition.x, gpsPosition.y, gpsPosition.z);
         }
 
-        // Attention: if you want to subscribe the single battery info on M300 RTK, you need connect USB cable to
-        // OSDK device or use topic DJI_FC_SUBSCRIPTION_TOPIC_BATTERY_INFO instead.
         djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_BATTERY_SINGLE_INFO_INDEX1,
                                                           (uint8_t *) &singleBatteryInfo,
                                                           sizeof(T_DjiFcSubscriptionSingleBatteryInfo),
@@ -183,7 +243,7 @@ T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void)
             USER_LOG_ERROR("get value of topic battery single info index1 error.");
         } else {
             USER_LOG_INFO(
-                "battery single info index1: capacity percent = %ld% voltage = %ldV temperature = %.2f degree.",
+                "battery single info index1: capacity percent = %ld%% voltage = %ldV temperature = %.2f degree.",
                 singleBatteryInfo.batteryCapacityPercent,
                 singleBatteryInfo.currentVoltage / 1000,
                 (dji_f32_t) singleBatteryInfo.batteryTemperature / 10);
@@ -197,7 +257,7 @@ T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void)
             USER_LOG_ERROR("get value of topic battery single info index2 error.");
         } else {
             USER_LOG_INFO(
-                "battery single info index2: capacity percent = %ld% voltage = %ldV temperature = %.2f degree.\r\n",
+                "battery single info index2: capacity percent = %ld%% voltage = %ldV temperature = %.2f degree.\r\n",
                 singleBatteryInfo.batteryCapacityPercent,
                 singleBatteryInfo.currentVoltage / 1000,
                 (dji_f32_t) singleBatteryInfo.batteryTemperature / 10);
@@ -213,18 +273,17 @@ T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void)
 
     djiStat = DjiFcSubscription_UnSubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_VELOCITY);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("UnSubscribe topic quaternion error.");
+        USER_LOG_ERROR("UnSubscribe topic velocity error.");
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
     djiStat = DjiFcSubscription_UnSubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION);
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("UnSubscribe topic quaternion error.");
+        USER_LOG_ERROR("UnSubscribe topic gps position error.");
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
     USER_LOG_INFO("--> Step 5: Deinit fc subscription module");
-
     djiStat = DjiFcSubscription_DeInit();
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Deinit fc subscription error.");
@@ -240,39 +299,84 @@ T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void)
 T_DjiReturnCode DjiTest_FcSubscriptionDataShowTrigger(void)
 {
     s_userFcSubscriptionDataShow = !s_userFcSubscriptionDataShow;
-
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
 T_DjiReturnCode DjiTest_FcSubscriptionGetTotalSatelliteNumber(uint8_t *number)
 {
     *number = s_totalSatelliteNumberUsed;
-
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
 /* Private functions definition-----------------------------------------------*/
+
+/*
+ * CsvNeedsHeader — returns true if the file doesn't exist yet or is empty,
+ * meaning we should write the header row before the first data row.
+ */
+static bool CsvNeedsHeader(const char *path)
+{
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL) {
+        return true;   /* file doesn't exist */
+    }
+    int c = fgetc(fp);
+    fclose(fp);
+    return (c == EOF); /* file exists but is empty */
+}
+
+/*
+ * WriteCsvRow — appends one data row to the telemetry CSV.
+ * The file pointer must already be open in append mode ("a").
+ */
+static void WriteCsvRow(FILE *fp,
+                        double lat, double lon, double alt,
+                        double pitch, double roll, double yaw)
+{
+    /* Wall-clock timestamp in ISO-8601 format */
+    time_t     now  = time(NULL);
+    struct tm *t    = localtime(&now);
+    char       ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", t);
+
+    fprintf(fp, "%s,%.7f,%.7f,%.2f,%.2f,%.2f,%.2f\n",
+            ts, lat, lon, alt, pitch, roll, yaw);
+    fflush(fp);
+}
+
 #ifndef __CC_ARM
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-noreturn"
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #endif
 
+/*
+ * UserFcSubscription_Task
+ *
+ * Runs at 1 Hz. On each tick:
+ *   1. Polls GPS position and GPS details from the FC subscription buffer.
+ *   2. Reads the latest pitch/roll/yaw (computed by the quaternion callback).
+ *   3. Appends one row to the telemetry CSV on the Raspberry Pi.
+ *
+ * CSV columns:
+ *   timestamp, latitude_deg, longitude_deg, altitude_m,
+ *   pitch_deg, roll_deg, yaw_deg
+ */
 static void *UserFcSubscription_Task(void *arg)
 {
-    T_DjiReturnCode djiStat;
-    T_DjiFcSubscriptionVelocity velocity = {0};
-    T_DjiDataTimestamp timestamp = {0};
+    T_DjiReturnCode            djiStat;
+    T_DjiFcSubscriptionVelocity    velocity    = {0};
     T_DjiFcSubscriptionGpsPosition gpsPosition = {0};
-    T_DjiFcSubscriptionGpsDetails gpsDetails = {0};
-    T_DjiOsalHandler *osalHandler = NULL;
+    T_DjiFcSubscriptionGpsDetails  gpsDetails  = {0};
+    T_DjiDataTimestamp             timestamp   = {0};
+    T_DjiOsalHandler              *osalHandler = DjiPlatform_GetOsalHandler();
 
     USER_UTIL_UNUSED(arg);
-    osalHandler = DjiPlatform_GetOsalHandler();
 
     while (1) {
         osalHandler->TaskSleepMs(1000 / FC_SUBSCRIPTION_TASK_FREQ);
 
+        /* ---- Poll velocity (unchanged behaviour) ---- */
         djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_VELOCITY,
                                                           (uint8_t *) &velocity,
                                                           sizeof(T_DjiFcSubscriptionVelocity),
@@ -282,10 +386,12 @@ static void *UserFcSubscription_Task(void *arg)
         }
 
         if (s_userFcSubscriptionDataShow == true) {
-            USER_LOG_INFO("velocity: x %f y %f z %f, healthFlag %d.", velocity.data.x, velocity.data.y,
+            USER_LOG_INFO("velocity: x %f y %f z %f, healthFlag %d.",
+                          velocity.data.x, velocity.data.y,
                           velocity.data.z, velocity.health);
         }
 
+        /* ---- Poll GPS position ---- */
         djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION,
                                                           (uint8_t *) &gpsPosition,
                                                           sizeof(T_DjiFcSubscriptionGpsPosition),
@@ -295,9 +401,11 @@ static void *UserFcSubscription_Task(void *arg)
         }
 
         if (s_userFcSubscriptionDataShow == true) {
-            USER_LOG_INFO("gps position: x %d y %d z %d.", gpsPosition.x, gpsPosition.y, gpsPosition.z);
+            USER_LOG_INFO("gps position: x %d y %d z %d.",
+                          gpsPosition.x, gpsPosition.y, gpsPosition.z);
         }
 
+        /* ---- Poll GPS details (satellite count) ---- */
         djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_DETAILS,
                                                           (uint8_t *) &gpsDetails,
                                                           sizeof(T_DjiFcSubscriptionGpsDetails),
@@ -314,6 +422,35 @@ static void *UserFcSubscription_Task(void *arg)
             s_totalSatelliteNumberUsed = gpsDetails.totalSatelliteNumberUsed;
         }
 
+        /* ---- Write telemetry CSV row ---- */
+        if (s_isCsvOutputPathConfigured) {
+
+            /* Convert raw GPS integers to human-readable units */
+            double lat = (double) gpsPosition.y * GPS_DEG_SCALE;  /* latitude  [deg] */
+            double lon = (double) gpsPosition.x * GPS_DEG_SCALE;  /* longitude [deg] */
+            double alt = (double) gpsPosition.z * GPS_ALT_SCALE;  /* altitude  [m]   */
+
+            /* Read latest euler angles (set by quaternion callback) */
+            osalHandler->MutexLock(s_eulerMutex);
+            double pitch = s_pitch;
+            double roll  = s_roll;
+            double yaw   = s_yaw;
+            osalHandler->MutexUnlock(s_eulerMutex);
+
+            /* Open in append mode — creates the file if it doesn't exist */
+            bool   writeHeader = CsvNeedsHeader(s_csvOutputPath);
+            FILE  *fp          = fopen(s_csvOutputPath, "a");
+            if (fp != NULL) {
+                if (writeHeader) {
+                    fprintf(fp, "timestamp,latitude_deg,longitude_deg,"
+                                "altitude_m,pitch_deg,roll_deg,yaw_deg\n");
+                }
+                WriteCsvRow(fp, lat, lon, alt, pitch, roll, yaw);
+                fclose(fp);
+            } else {
+                USER_LOG_ERROR("Cannot open telemetry CSV: %s", s_csvOutputPath);
+            }
+        }
     }
 }
 
@@ -321,30 +458,50 @@ static void *UserFcSubscription_Task(void *arg)
 #pragma GCC diagnostic pop
 #endif
 
-static T_DjiReturnCode DjiTest_FcSubscriptionReceiveQuaternionCallback(const uint8_t *data, uint16_t dataSize,
+/*
+ * DjiTest_FcSubscriptionReceiveQuaternionCallback
+ *
+ * Called by PSDK at 50 Hz. Converts quaternion to pitch/roll/yaw in degrees
+ * and stores them in the shared static variables for the 1 Hz task to read.
+ */
+static T_DjiReturnCode DjiTest_FcSubscriptionReceiveQuaternionCallback(const uint8_t *data,
+                                                                       uint16_t dataSize,
                                                                        const T_DjiDataTimestamp *timestamp)
 {
     T_DjiFcSubscriptionQuaternion *quaternion = (T_DjiFcSubscriptionQuaternion *) data;
-    dji_f64_t pitch, yaw, roll;
+    T_DjiOsalHandler              *osalHandler = DjiPlatform_GetOsalHandler();
 
     USER_UTIL_UNUSED(dataSize);
 
-    pitch = (dji_f64_t) asinf(-2 * quaternion->q1 * quaternion->q3 + 2 * quaternion->q0 * quaternion->q2) * 57.3;
-    roll = (dji_f64_t) atan2f(2 * quaternion->q2 * quaternion->q3 + 2 * quaternion->q0 * quaternion->q1,
-                             -2 * quaternion->q1 * quaternion->q1 - 2 * quaternion->q2 * quaternion->q2 + 1) * 57.3;
-    yaw = (dji_f64_t) atan2f(2 * quaternion->q1 * quaternion->q2 + 2 * quaternion->q0 * quaternion->q3,
-                             -2 * quaternion->q2 * quaternion->q2 - 2 * quaternion->q3 * quaternion->q3 + 1) *
-          57.3;
+    double pitch = (double) asinf(-2 * quaternion->q1 * quaternion->q3 +
+                                   2 * quaternion->q0 * quaternion->q2) * 57.3;
+    double roll  = (double) atan2f(2 * quaternion->q2 * quaternion->q3 +
+                                    2 * quaternion->q0 * quaternion->q1,
+                                   -2 * quaternion->q1 * quaternion->q1 -
+                                    2 * quaternion->q2 * quaternion->q2 + 1) * 57.3;
+    double yaw   = (double) atan2f(2 * quaternion->q1 * quaternion->q2 +
+                                    2 * quaternion->q0 * quaternion->q3,
+                                   -2 * quaternion->q2 * quaternion->q2 -
+                                    2 * quaternion->q3 * quaternion->q3 + 1) * 57.3;
 
+    /* Store under mutex so the 1 Hz task always sees a consistent set */
+    osalHandler->MutexLock(s_eulerMutex);
+    s_pitch = pitch;
+    s_roll  = roll;
+    s_yaw   = yaw;
+    osalHandler->MutexUnlock(s_eulerMutex);
+
+    /* Console logging (throttled to 1 Hz equivalent) */
     if (s_userFcSubscriptionDataShow == true) {
         if (s_userFcSubscriptionDataCnt++ % DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ == 0) {
             USER_LOG_INFO("receive quaternion data.");
-            USER_LOG_INFO("timestamp: millisecond %u microsecond %u.", timestamp->millisecond,
-                          timestamp->microsecond);
-            USER_LOG_INFO("quaternion: %f %f %f %f.", quaternion->q0, quaternion->q1, quaternion->q2,
-                          quaternion->q3);
-
-            USER_LOG_INFO("euler angles: pitch = %.2f roll = %.2f yaw = %.2f.\r\n", pitch, roll, yaw);
+            USER_LOG_INFO("timestamp: millisecond %u microsecond %u.",
+                          timestamp->millisecond, timestamp->microsecond);
+            USER_LOG_INFO("quaternion: %f %f %f %f.",
+                          quaternion->q0, quaternion->q1,
+                          quaternion->q2, quaternion->q3);
+            USER_LOG_INFO("euler angles: pitch = %.2f roll = %.2f yaw = %.2f.\r\n",
+                          pitch, roll, yaw);
             DjiTest_WidgetLogAppend("pitch = %.2f roll = %.2f yaw = %.2f.", pitch, roll, yaw);
         }
     }

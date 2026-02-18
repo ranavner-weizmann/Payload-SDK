@@ -14,7 +14,7 @@
  * material(s) incorporated within the information, in any form, is strictly
  * prohibited without the express written consent of DJI.
  *
- * If you receive this source code without DJI’s authorization, you may not
+ * If you receive this source code without DJI's authorization, you may not
  * further disseminate the information, and you must immediately remove the
  * source code and notify DJI of its removal. DJI reserves the right to pursue
  * legal actions against you for any loss(es) or damage(s) caused by your
@@ -37,15 +37,27 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 
-
 /* Exported types ------------------------------------------------------------*/
-
 
 /* Exported functions --------------------------------------------------------*/
 T_DjiReturnCode DjiTest_FcSubscriptionStartService(void);
 T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void);
 T_DjiReturnCode DjiTest_FcSubscriptionDataShowTrigger(void);
 T_DjiReturnCode DjiTest_FcSubscriptionGetTotalSatelliteNumber(uint8_t *number);
+
+/**
+ * @brief Set the output path for the drone telemetry CSV file.
+ *
+ * Must be called before DjiTest_FcSubscriptionStartService().
+ * The CSV will be created (or appended to) at this path and written at 1 Hz.
+ *
+ * Format:
+ *   timestamp,latitude_deg,longitude_deg,altitude_m,pitch_deg,roll_deg,yaw_deg
+ *
+ * @param path  Absolute path on the Raspberry Pi filesystem,
+ *              e.g. "/home/rsp/drone_air_system/data_from_drone/telemetry.csv"
+ */
+T_DjiReturnCode DjiTest_FcSubscriptionSetCsvOutputPath(const char *path);
 
 #ifdef __cplusplus
 }

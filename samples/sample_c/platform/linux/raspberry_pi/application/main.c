@@ -13,7 +13,7 @@
  * material(s) incorporated within the information, in any form, is strictly
  * prohibited without the express written consent of DJI.
  *
- * If you receive this source code without DJI’s authorization, you may not
+ * If you receive this source code without DJI's authorization, you may not
  * further disseminate the information, and you must immediately remove the
  * source code and notify DJI of its removal. DJI reserves the right to pursue
  * legal actions against you for any loss(es) or damage(s) caused by your
@@ -66,8 +66,12 @@
 #define DJI_LOG_MAX_COUNT               (10)
 #define DJI_SYSTEM_CMD_STR_MAX_SIZE     (64)
 #define DJI_SYSTEM_RESULT_STR_MAX_SIZE  (128)
-#define TRANSMITTED_CSV_PATH               "/home/rsp/drone_air_system/data_to_sdk/vitals.csv"
 
+/* Path to the live sensor CSV written by the air system (read by widget) */
+#define TRANSMITTED_CSV_PATH        "/home/rsp/drone_air_system/data_to_sdk/vitals.csv"
+
+/* Path where the drone telemetry CSV will be saved (written by FC subscription) */
+#define DRONE_TELEMETRY_CSV_PATH    "/home/rsp/drone_air_system/data_from_drone/telemetry.csv"
 
 /* Private types -------------------------------------------------------------*/
 typedef struct {
@@ -159,13 +163,15 @@ int main(int argc, char **argv)
         return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
     }
 
-        returnCode = DjiAircraftInfo_GetAircraftVersion(&aircraftInfoVersion);
-        if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-            USER_LOG_ERROR("get aircraft version info error");
-        } else {
-            USER_LOG_INFO("Aircraft version is V%02d.%02d.%02d.%02d", aircraftInfoVersion.majorVersion,
-                          aircraftInfoVersion.minorVersion, aircraftInfoVersion.modifyVersion,
-                          aircraftInfoVersion.debugVersion);
+    returnCode = DjiAircraftInfo_GetAircraftVersion(&aircraftInfoVersion);
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("get aircraft version info error");
+    } else {
+        USER_LOG_INFO("Aircraft version is V%02d.%02d.%02d.%02d",
+                      aircraftInfoVersion.majorVersion,
+                      aircraftInfoVersion.minorVersion,
+                      aircraftInfoVersion.modifyVersion,
+                      aircraftInfoVersion.debugVersion);
     }
 
     /*!< Step 4: Initialize the selected modules by macros in dji_sdk_config.h . */
@@ -204,10 +210,6 @@ int main(int argc, char **argv)
         DjiTest_WidgetSetCsvFilePath(TRANSMITTED_CSV_PATH);
     #endif
 
-
-  
-
-
     #if CONFIG_MODULE_SAMPLE_WIDGET_SPEAKER_ON
         returnCode = DjiTest_WidgetSpeakerStartService();
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
@@ -234,6 +236,8 @@ int main(int argc, char **argv)
         #endif
 
         #if CONFIG_MODULE_SAMPLE_FC_SUBSCRIPTION_ON
+            DjiTest_FcSubscriptionSetCsvOutputPath(DRONE_TELEMETRY_CSV_PATH);
+
             returnCode = DjiTest_FcSubscriptionStartService();
             if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
                 USER_LOG_ERROR("data subscription sample init error\n");
@@ -259,12 +263,12 @@ int main(int argc, char **argv)
             }
         #endif
 
-    #if CONFIG_MODULE_SAMPLE_MOP_CHANNEL_ON
-        returnCode = DjiTest_MopChannelStartService();
-        if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-            USER_LOG_ERROR("mop channel sample init error");
-        }
-    #endif
+        #if CONFIG_MODULE_SAMPLE_MOP_CHANNEL_ON
+            returnCode = DjiTest_MopChannelStartService();
+            if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                USER_LOG_ERROR("mop channel sample init error");
+            }
+        #endif
 
         #if CONFIG_MODULE_SAMPLE_PAYLOAD_COLLABORATION_ON
             if (aircraftInfoBaseInfo.djiAdapterType == DJI_SDK_ADAPTER_TYPE_SKYPORT_V2 ||
@@ -307,7 +311,6 @@ int main(int argc, char **argv)
             USER_LOG_ERROR("hms test init error");
         }
     #endif
-
 
     #if CONFIG_MODULE_SAMPLE_TETHERED_BATTERY_ON
         if (aircraftInfoBaseInfo.djiAdapterType == DJI_SDK_ADAPTER_TYPE_EPORT_V2_RIBBON_CABLE) {
@@ -485,7 +488,6 @@ static T_DjiReturnCode DjiUser_PrepareSystemEnvironment(void)
             return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
         }
 
-        //Attention: if you want to use camera stream view function, please uncomment it.
         returnCode = DjiPlatform_RegSocketHandler(&socketHandler);
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             printf("register osal socket handler error");
@@ -513,7 +515,6 @@ static T_DjiReturnCode DjiUser_PrepareSystemEnvironment(void)
             return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
         }
 
-        //Attention: if you want to use camera stream view function, please uncomment it.
         returnCode = DjiPlatform_RegSocketHandler(&socketHandler);
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             printf("register osal socket handler error");
@@ -801,5 +802,3 @@ static void DjiUser_NormalExitHandler(int signalNum)
 #pragma GCC diagnostic pop
 
 /****************** (C) COPYRIGHT DJI Innovations *****END OF FILE****/
-
-
