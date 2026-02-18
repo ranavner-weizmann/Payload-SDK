@@ -1,6 +1,6 @@
-## This is a fork of the DJI PSDK repo by DJI.
-## It was modified to fit the air sensing system, using a Raspberry Pi 4 B. 
-## For any questions regarding the operation and deployment, contact ran.avner@weizmann.ac.il
+This is a fork of the DJI PSDK repo by DJI.
+It was modified to fit the air sensing system, using a Raspberry Pi 4 B. 
+For any questions regarding the operation and deployment, contact ran.avner@weizmann.ac.il
 
 # DJI Payload SDK (PSDK)
 
