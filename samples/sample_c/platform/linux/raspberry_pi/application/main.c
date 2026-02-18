@@ -197,10 +197,13 @@ int main(int argc, char **argv)
         returnCode = DjiTest_WidgetInteractionStartService();
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("widget sample init error");
-        
         }
+
+        DjiTest_WidgetActionSetCsvPath("/home/rsp/drone_air_system/data_to_sdk/widget_actions_status.csv");
+
         DjiTest_WidgetSetCsvFilePath(TRANSMITTED_CSV_PATH);
     #endif
+
 
   
 

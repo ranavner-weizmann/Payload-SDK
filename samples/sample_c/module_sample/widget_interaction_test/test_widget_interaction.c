@@ -49,6 +49,12 @@
 #include "dji_hms.h"
 #include "positioning/test_positioning.h"
 
+/* Added for widget action CSV logging */
+#include <string.h>
+#include <time.h>
+#include <pthread.h>
+#include <stdlib.h>
+
 /* Private constants ---------------------------------------------------------*/
 #define WIDGET_DIR_PATH_LEN_MAX         (256)
 #define WIDGET_TASK_STACK_SIZE          (2048)
@@ -59,6 +65,9 @@
 #define DJI_HMS_ERROR_CODE_VALUE3    0x1E020003
 #define DJI_HMS_ERROR_CODE_VALUE4    0x1E020004
 
+/* Widget action CSV logging */
+#define WIDGET_ACTION_CSV_DEFAULT_PATH   "/ran_widget_status/widget_actions.csv"
+#define WIDGET_ACTION_CSV_FLUSH_EVERY_N  (1)   /* 1 = flush every row (safest) */
 
 /* Private types -------------------------------------------------------------*/
 typedef enum {
@@ -119,6 +128,12 @@ static T_DjiReturnCode DjiTestWidget_GetWidgetValue(E_DjiWidgetType widgetType, 
                                                     void *userData);
 static T_DjiReturnCode DjiTestWidget_TriggerChangeAlias(void);
 
+/* Widget action CSV logging helpers */
+static uint64_t WidgetAction_NowMs(void);
+static void WidgetActionCsv_OpenIfNeededLocked(void);
+static void WidgetActionCsv_CloseIfOpenedLocked(void);
+static void WidgetActionCsv_WriteRow(E_DjiWidgetType widgetType, uint32_t index, int32_t value);
+
 /* Private values ------------------------------------------------------------*/
 static T_DjiTaskHandle s_widgetTestThread;
 static T_DjiTaskHandle s_widgetInteractionTestThread;
@@ -165,6 +180,12 @@ static int32_t s_widgetValueList[sizeof(s_widgetHandlerList) / sizeof(T_DjiWidge
 static bool s_isWidgetFileDirPathConfigured = false;
 static char s_widgetFileDirPath[DJI_FILE_PATH_SIZE_MAX] = {0};
 
+/* Widget action CSV logging state */
+static FILE *s_widgetActionCsvFp = NULL;
+static char s_widgetActionCsvPath[DJI_FILE_PATH_SIZE_MAX] = WIDGET_ACTION_CSV_DEFAULT_PATH;
+static uint32_t s_widgetActionCsvRowCnt = 0;
+static pthread_mutex_t s_widgetActionCsvMutex = PTHREAD_MUTEX_INITIALIZER;
+
 /* Exported functions definition ---------------------------------------------*/
 T_DjiReturnCode DjiTest_WidgetInteractionStartService(void)
 {
@@ -177,6 +198,9 @@ T_DjiReturnCode DjiTest_WidgetInteractionStartService(void)
         USER_LOG_ERROR("Dji test widget init error, stat = 0x%08llX", djiStat);
         return djiStat;
     }
+
+    /* Ensure CSV is closed/flushed on normal process exit */
+    atexit((void (*)(void))WidgetActionCsv_CloseIfOpenedLocked);
 
 #ifdef SYSTEM_ARCH_LINUX_DISABLE
     //Step 2 : Set UI Config (Linux environment)
@@ -270,6 +294,27 @@ T_DjiReturnCode DjiTest_WidgetInteractionSetConfigFilePath(const char *path)
     memcpy(s_widgetFileDirPath, path, USER_UTIL_MIN(strlen(path), sizeof(s_widgetFileDirPath) - 1));
     s_isWidgetFileDirPathConfigured = true;
 
+    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+}
+
+/* Optional: set widget action CSV path (exported).
+ * Add prototype to test_widget_interaction.h if you want to call from main.c.
+ */
+T_DjiReturnCode DjiTest_WidgetActionSetCsvPath(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        return DJI_ERROR_SYSTEM_MODULE_CODE_INVALID_PARAMETER;
+    }
+
+    pthread_mutex_lock(&s_widgetActionCsvMutex);
+
+    memset(s_widgetActionCsvPath, 0, sizeof(s_widgetActionCsvPath));
+    memcpy(s_widgetActionCsvPath, path, USER_UTIL_MIN(strlen(path), sizeof(s_widgetActionCsvPath) - 1));
+
+    /* Rotate file if already open */
+    WidgetActionCsv_CloseIfOpenedLocked();
+
+    pthread_mutex_unlock(&s_widgetActionCsvMutex);
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
@@ -567,6 +612,9 @@ static T_DjiReturnCode DjiTestWidget_SetWidgetValue(E_DjiWidgetType widgetType, 
 {
     USER_UTIL_UNUSED(userData);
 
+    /* Log every widget action to CSV in real-time */
+    WidgetActionCsv_WriteRow(widgetType, index, value);
+
     DjiTest_WidgetLogAppend("SetWidget type:%s index:%d value:%d",
                             s_widgetTypeNameArray[widgetType], index, value);
     USER_LOG_INFO("Set widget value, widgetType = %s, widgetIndex = %d ,widgetValue = %d",
@@ -644,6 +692,70 @@ static T_DjiReturnCode DjiTestWidget_TriggerChangeAlias(void)
     USER_LOG_INFO("Payload alias sample end");
 
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+}
+
+/* ---------------- Widget action CSV logging helpers ---------------- */
+
+static uint64_t WidgetAction_NowMs(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static void WidgetActionCsv_OpenIfNeededLocked(void)
+{
+    if (s_widgetActionCsvFp != NULL) {
+        return;
+    }
+
+    s_widgetActionCsvFp = fopen(s_widgetActionCsvPath, "w");
+    if (s_widgetActionCsvFp == NULL) {
+        USER_LOG_ERROR("Failed to open widget action CSV: %s", s_widgetActionCsvPath);
+        return;
+    }
+
+    fprintf(s_widgetActionCsvFp, "ts_ms,widget_type,widget_index,value\n");
+    fflush(s_widgetActionCsvFp);
+    s_widgetActionCsvRowCnt = 0;
+
+    USER_LOG_INFO("Widget action CSV logging enabled: %s", s_widgetActionCsvPath);
+}
+
+static void WidgetActionCsv_CloseIfOpenedLocked(void)
+{
+    /* This function is safe to call multiple times */
+    if (s_widgetActionCsvFp) {
+        fflush(s_widgetActionCsvFp);
+        fclose(s_widgetActionCsvFp);
+        s_widgetActionCsvFp = NULL;
+    }
+}
+
+static void WidgetActionCsv_WriteRow(E_DjiWidgetType widgetType, uint32_t index, int32_t value)
+{
+    pthread_mutex_lock(&s_widgetActionCsvMutex);
+
+    WidgetActionCsv_OpenIfNeededLocked();
+    if (s_widgetActionCsvFp) {
+        const uint64_t ts_ms = WidgetAction_NowMs();
+
+        const char *typeName = "Unknown";
+        if (widgetType < (sizeof(s_widgetTypeNameArray) / sizeof(s_widgetTypeNameArray[0]))) {
+            typeName = s_widgetTypeNameArray[widgetType];
+        }
+
+        fprintf(s_widgetActionCsvFp, "%llu,%s,%u,%d\n",
+                (unsigned long long)ts_ms, typeName, index, value);
+
+        s_widgetActionCsvRowCnt++;
+        if (WIDGET_ACTION_CSV_FLUSH_EVERY_N > 0 &&
+            (s_widgetActionCsvRowCnt % WIDGET_ACTION_CSV_FLUSH_EVERY_N) == 0) {
+            fflush(s_widgetActionCsvFp);
+        }
+    }
+
+    pthread_mutex_unlock(&s_widgetActionCsvMutex);
 }
 
 /****************** (C) COPYRIGHT DJI Innovations *****END OF FILE****/
