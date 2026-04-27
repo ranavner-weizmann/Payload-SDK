@@ -30,9 +30,10 @@
 #include <dji_platform.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>       /* NAN, isnan() */
+#include <stdarg.h>
 #include "dji_sdk_config.h"
 #include "file_binary_array_list_en.h"
-#include <stdarg.h>
 
 /* Private constants ---------------------------------------------------------*/
 #define WIDGET_DIR_PATH_LEN_MAX         (256)
@@ -40,21 +41,7 @@
 #define WIDGET_LOG_STRING_MAX_SIZE      (64)
 #define WIDGET_LOG_LINE_MAX_NUM         (4)
 
-/*
- * vitals.csv column indices (0-based, after the timestamp column)
- *
- * timestamp, iMet_Temp_C, iMet_Pressure_hPa, iMet_Relative_Humidity,
- * POM_Ozone_ppb, Tri_Wind_U, Tri_Wind_V, Tri_Wind_W,
- * Spectro_Peak_nm, Spectro_MaxIntensity,
- * Partector_Particle_Count_#/cm3, Partector_Battery_Voltage_V,
- * Aeth_Blue_BlackCarbon,
- * POPS_Bin_4, POPS_Bin_8, POPS_Bin_15,
- * TEC_Output_Current, TEC_Output_Voltage, TEC_Target_Temperature,
- * LDD_Output_Current, TEC_Object_Temperature,
- * Inline_Temp, Inline_Relative_Humidity, Inline_Pressure_mbar,
- * Pump_RPM
- */
-#define VITALS_NUM_FIELDS   (11)
+#define VITALS_NUM_FIELDS               (11)
 
 /* Private types -------------------------------------------------------------*/
 typedef struct {
@@ -62,13 +49,33 @@ typedef struct {
     char  content[WIDGET_LOG_STRING_MAX_SIZE];
 } T_DjiTestWidgetLog;
 
+/*
+ * T_VitalsField — one entry in the field dictionary.
+ *
+ * csvHeader   : exact column name as it appears in the vitals.csv header row.
+ *               Change these strings to match your actual CSV headers.
+ * label       : short label shown in the DJI floating window.
+ * unit        : unit suffix appended after the value (empty string = no unit).
+ * fmt         : printf format for the numeric value (e.g. "%.1f").
+ * colIndex    : resolved at runtime by ResolveVitalsHeaders(); do not edit.
+ * value       : last parsed reading; NAN means the field was absent or empty.
+ */
+typedef struct {
+    const char *csvHeader;
+    const char *label;
+    const char *unit;
+    const char *fmt;
+    int         colIndex;   /* -1 = not yet resolved / not found in CSV */
+    float       value;      /* NAN  = missing / not parsed              */
+} T_VitalsField;
+
 /* Private functions declaration ---------------------------------------------*/
 static T_DjiReturnCode DjiTestWidget_SetWidgetValue(E_DjiWidgetType widgetType, uint32_t index, int32_t value,
                                                     void *userData);
 static T_DjiReturnCode DjiTestWidget_GetWidgetValue(E_DjiWidgetType widgetType, uint32_t index, int32_t *value,
                                                     void *userData);
-static bool ParseVitalsLine(const char *line, char *tsBuf, size_t tsBufSize,
-                            float *fOut, int numFields);
+static void  ResolveVitalsHeaders(const char *headerLine);
+static bool  ParseVitalsDataLine(const char *line, char *tsBuf, size_t tsBufSize);
 
 /* Private values ------------------------------------------------------------*/
 static T_DjiTaskHandle s_widgetTestThread;
@@ -77,9 +84,37 @@ static T_DjiTaskHandle s_widgetTestThread;
 static bool s_isCsvFilePathConfigured               = false;
 static char s_csvFilePath[WIDGET_DIR_PATH_LEN_MAX]  = {0};
 
-static bool s_isWidgetFileDirPathConfigured                 = false;
-static char s_widgetFileDirPath[DJI_FILE_PATH_SIZE_MAX]     = {0};
+static bool s_isWidgetFileDirPathConfigured             = false;
+static char s_widgetFileDirPath[DJI_FILE_PATH_SIZE_MAX] = {0};
 static T_DjiTestWidgetLog s_djiTestWidgetLog[WIDGET_LOG_LINE_MAX_NUM] = {0};
+
+/* =========================================================================
+ * FIELD DICTIONARY — edit csvHeader strings to match your vitals.csv exactly.
+ *
+ * The code reads the CSV header row at runtime, finds each csvHeader string,
+ * and records its column index. Data values are then extracted by column
+ * position rather than by a fixed offset, so column order in the CSV does
+ * not matter as long as the header names match.
+ *
+ * colIndex and value are managed at runtime — do not edit those fields.
+ * ========================================================================= */
+static T_VitalsField s_vitalsFields[VITALS_NUM_FIELDS] = {
+    /* csvHeader                          label    unit   fmt     colIndex  value */
+    { "iMet_Temp_C",                      "T",     "C",   "%.1f", -1,       NAN   },
+    { "POM_Ozone_ppb",                    "O3",    "ppb", "%.1f", -1,       NAN   },
+    { "Spectro_MaxIntensity",             "I",     "",    "%.0f", -1,       NAN   },
+    { "Partector_Particle_Count_#/cm3",   "PM",    "/cc", "%.0f", -1,       NAN   },
+    { "Aeth_Blue_BlackCarbon",            "MA",    "",    "%.3f", -1,       NAN   },
+    { "TEC_Output_Current",               "TECA",  "A",   "%.2f", -1,       NAN   },
+    { "TEC_Object_Temperature",           "TECT",  "C",   "%.1f", -1,       NAN   },
+    { "Inline_Temp",                      "Ti",    "C",   "%.1f", -1,       NAN   },
+    { "Inline_Relative_Humidity",         "RHi",   "%",   "%.1f", -1,       NAN   },
+    { "Inline_Pressure_mbar",             "Pi",    "mb",  "%.1f", -1,       NAN   },
+    { "Pump_RPM",                         "RPM",   "",    "%.0f", -1,       NAN   },
+};
+
+/* Set to true once the header row has been successfully parsed */
+static bool s_vitalsHeadersResolved = false;
 
 static const T_DjiWidgetHandlerListItem s_widgetHandlerList[] = {
     {0, DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
@@ -237,57 +272,133 @@ T_DjiReturnCode DjiTest_WidgetSetCsvFilePath(const char *path)
     memcpy(s_csvFilePath, path, USER_UTIL_MIN(strlen(path), sizeof(s_csvFilePath) - 1));
     s_isCsvFilePathConfigured = true;
 
+    /* Force header re-resolution next time the task reads the file,
+     * in case the new CSV has a different column layout. */
+    s_vitalsHeadersResolved = false;
+
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
-/*
- * ParseVitalsLine
+/* -------------------------------------------------------------------------
+ * ResolveVitalsHeaders
  *
- * Empty-field-safe CSV parser. Unlike sscanf with "%f", this correctly handles
- * consecutive commas (empty fields) by treating them as 0.0f.
+ * Parses the CSV header row and sets colIndex on every entry in
+ * s_vitalsFields[] to the 0-based column number where that field's
+ * csvHeader string was found. Fields whose csvHeader is not present in
+ * the header row keep colIndex = -1, and their value will remain NAN.
  *
- * Reads the timestamp into tsBuf, then reads up to numFields float values
- * into fOut[]. Missing trailing fields are left as 0.
+ * Called once per CSV file open (guarded by s_vitalsHeadersResolved).
+ * ------------------------------------------------------------------------- */
+static void ResolveVitalsHeaders(const char *headerLine)
+{
+    int         col = 0;
+    const char *cur = headerLine;
+    char        token[64];
+    int         i;
+
+    /* Reset all column indices */
+    for (i = 0; i < VITALS_NUM_FIELDS; i++) {
+        s_vitalsFields[i].colIndex = -1;
+    }
+
+    while (cur != NULL) {
+        const char *comma = strchr(cur, ',');
+        size_t      len   = comma ? (size_t)(comma - cur) : strlen(cur);
+
+        if (len >= sizeof(token)) len = sizeof(token) - 1;
+        memcpy(token, cur, len);
+        token[len] = '\0';
+
+        /* Strip trailing whitespace / CR / LF */
+        {
+            size_t tlen = strlen(token);
+            while (tlen > 0 &&
+                   (token[tlen - 1] == ' '  || token[tlen - 1] == '\t' ||
+                    token[tlen - 1] == '\r' || token[tlen - 1] == '\n')) {
+                token[--tlen] = '\0';
+            }
+        }
+
+        /* Match against every field in the dictionary */
+        for (i = 0; i < VITALS_NUM_FIELDS; i++) {
+            if (strcmp(token, s_vitalsFields[i].csvHeader) == 0) {
+                s_vitalsFields[i].colIndex = col;
+                break;
+            }
+        }
+
+        col++;
+        cur = comma ? comma + 1 : NULL;
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * ParseVitalsDataLine
  *
- * Returns true if at least the timestamp was successfully read.
- */
-static bool ParseVitalsLine(const char *line,
-                            char *tsBuf, size_t tsBufSize,
-                            float *fOut, int numFields)
+ * Parses one data row using the column indices resolved by
+ * ResolveVitalsHeaders(). Stores each reading into the corresponding
+ * s_vitalsFields[].value. Empty tokens or columns whose header was not
+ * found are stored as NAN so the display can show "---" instead of a
+ * misleading zero.
+ *
+ * The timestamp (column 0) is written to tsBuf.
+ * Returns true if the timestamp was successfully read.
+ * ------------------------------------------------------------------------- */
+static bool ParseVitalsDataLine(const char *line, char *tsBuf, size_t tsBufSize)
 {
     const char *cur = line;
-    char field[64];
-    int i;
+    char        field[64];
+    int         col = 0;
+    int         i;
+
+    /* Reset all field values to NAN */
+    for (i = 0; i < VITALS_NUM_FIELDS; i++) {
+        s_vitalsFields[i].value = NAN;
+    }
 
     if (cur == NULL || *cur == '\0') return false;
 
-    /* Read the timestamp (field 0) */
-    {
+    for (;;) {
         const char *comma = strchr(cur, ',');
-        size_t len = comma ? (size_t)(comma - cur) : strlen(cur);
-        if (len >= tsBufSize) len = tsBufSize - 1;
-        memcpy(tsBuf, cur, len);
-        tsBuf[len] = '\0';
-        cur = comma ? comma + 1 : cur + strlen(cur);
-    }
+        size_t      len   = comma ? (size_t)(comma - cur) : strlen(cur);
 
-    /* Read numeric fields 1..numFields — empty token becomes 0.0f */
-    for (i = 0; i < numFields; i++) {
-        const char *comma = strchr(cur, ',');
-        /* A field exists if we are not at end-of-string, OR a comma follows */
-        if (*cur != '\0' || comma != NULL) {
-            size_t len = comma ? (size_t)(comma - cur) : strlen(cur);
-            if (len >= sizeof(field)) len = sizeof(field) - 1;
-            memcpy(field, cur, len);
-            field[len] = '\0';
-            fOut[i] = (field[0] != '\0') ? strtof(field, NULL) : 0.0f;
-            cur = comma ? comma + 1 : cur + strlen(cur);
-        } else {
-            fOut[i] = 0.0f;
+        if (len >= sizeof(field)) len = sizeof(field) - 1;
+        memcpy(field, cur, len);
+        field[len] = '\0';
+
+        /* Strip trailing CR / LF from the last field in the row */
+        {
+            size_t flen = strlen(field);
+            while (flen > 0 &&
+                   (field[flen - 1] == '\r' || field[flen - 1] == '\n')) {
+                field[--flen] = '\0';
+            }
         }
+
+        if (col == 0) {
+            /* Column 0 is always the timestamp */
+            size_t tsLen = strlen(field);
+            if (tsLen >= tsBufSize) tsLen = tsBufSize - 1;
+            memcpy(tsBuf, field, tsLen);
+            tsBuf[tsLen] = '\0';
+        } else {
+            /* Look up which vitals field (if any) lives at this column */
+            for (i = 0; i < VITALS_NUM_FIELDS; i++) {
+                if (s_vitalsFields[i].colIndex == col) {
+                    /* Empty token → NAN (will display as "---") */
+                    s_vitalsFields[i].value =
+                        (field[0] != '\0') ? strtof(field, NULL) : NAN;
+                    break;
+                }
+            }
+        }
+
+        col++;
+        if (comma == NULL) break;
+        cur = comma + 1;
     }
 
-    return true;
+    return (tsBuf[0] != '\0');
 }
 
 #ifndef __CC_ARM
@@ -300,29 +411,17 @@ static bool ParseVitalsLine(const char *line,
 /*
  * DjiTest_WidgetTask
  *
- * Runs at 1 Hz. Reads the last data line from vitals.csv and parses the
- * 24 sensor fields. The floating window alternates between two pages every
- * second so all fields are visible within 2 seconds:
+ * Runs at 1 Hz. Opens vitals.csv on every tick, resolves headers on the
+ * first read (or whenever the CSV path changes), then parses the last data
+ * row and displays all fields in the DJI Pilot 2 floating window.
  *
- *   Page 1 (odd ticks):  Meteorology, Wind, Spectrometer, Aethalometer
- *   Page 2 (even ticks): Particles, POPS, TEC/LDD, Inline sensors, Pump
- *
- * Expected CSV format (header row optional, first data char must be a digit):
- *   timestamp, iMet_Temp_C, iMet_Pressure_hPa, iMet_Relative_Humidity,
- *   POM_Ozone_ppb, Tri_Wind_U, Tri_Wind_V, Tri_Wind_W,
- *   Spectro_Peak_nm, Spectro_MaxIntensity,
- *   Partector_Particle_Count_#/cm3, Partector_Battery_Voltage_V,
- *   Aeth_Blue_BlackCarbon,
- *   POPS_Bin_4, POPS_Bin_8, POPS_Bin_15,
- *   TEC_Output_Current, TEC_Output_Voltage, TEC_Target_Temperature,
- *   LDD_Output_Current, TEC_Object_Temperature,
- *   Inline_Temp, Inline_Relative_Humidity, Inline_Pressure_mbar,
- *   Pump_RPM
+ * Fields that are absent from the CSV header or whose value is empty are
+ * shown as "---" rather than a misleading zero.
  */
 void *DjiTest_WidgetTask(void *arg)
 {
-    char             message[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
-    T_DjiReturnCode  djiStat;
+    char              message[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
+    T_DjiReturnCode   djiStat;
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
 
     USER_UTIL_UNUSED(arg);
@@ -330,11 +429,11 @@ void *DjiTest_WidgetTask(void *arg)
     while (1) {
 
         /* ----------------------------------------------------------------
-         * Step 1 — Parse the last data line from vitals.csv
+         * Step 1 — Read vitals.csv: resolve headers (once) then parse the
+         *           last data line.
          * ---------------------------------------------------------------- */
-        char  ts[64]                  = "N/A";
-        float f[VITALS_NUM_FIELDS]    = {0};
-        bool  parsed                  = false;
+        char ts[64] = "N/A";
+        bool parsed = false;
 
         if (s_isCsvFilePathConfigured) {
             FILE *fp = fopen(s_csvFilePath, "r");
@@ -343,28 +442,34 @@ void *DjiTest_WidgetTask(void *arg)
                 char lastDataLine[512] = {0};
 
                 while (fgets(buf, sizeof(buf), fp) != NULL) {
-                    /* Skip header row — data rows always start with a digit */
                     if (buf[0] >= '0' && buf[0] <= '9') {
+                        /* Data row */
                         strncpy(lastDataLine, buf, sizeof(lastDataLine) - 1);
                         lastDataLine[sizeof(lastDataLine) - 1] = '\0';
+                    } else if (!s_vitalsHeadersResolved && buf[0] != '\0') {
+                        /*
+                         * First non-data row encountered before headers are
+                         * resolved → treat it as the header row.
+                         * This handles CSV files where the header is the
+                         * first line (the common case).
+                         */
+                        ResolveVitalsHeaders(buf);
+                        s_vitalsHeadersResolved = true;
+
+                        /* Log any fields that could not be matched */
+                        int i;
+                        for (i = 0; i < VITALS_NUM_FIELDS; i++) {
+                            if (s_vitalsFields[i].colIndex == -1) {
+                                USER_LOG_WARN("Vitals header not found in CSV: \"%s\"",
+                                              s_vitalsFields[i].csvHeader);
+                            }
+                        }
                     }
                 }
                 fclose(fp);
 
                 if (lastDataLine[0] != '\0') {
-                    /* Strip trailing newline / carriage return */
-                    size_t len = strlen(lastDataLine);
-                    while (len > 0 &&
-                           (lastDataLine[len - 1] == '\n' ||
-                            lastDataLine[len - 1] == '\r')) {
-                        lastDataLine[--len] = '\0';
-                    }
-
-                    /*
-                     * Empty-field-safe CSV parse using ParseVitalsLine().
-                     * Empty tokens (consecutive commas) become 0.0f.
-                     */
-                    parsed = ParseVitalsLine(lastDataLine, ts, sizeof(ts), f, VITALS_NUM_FIELDS);
+                    parsed = ParseVitalsDataLine(lastDataLine, ts, sizeof(ts));
                 }
             } else {
                 USER_LOG_WARN("Cannot open CSV: %s", s_csvFilePath);
@@ -372,44 +477,51 @@ void *DjiTest_WidgetTask(void *arg)
         }
 
         /* ----------------------------------------------------------------
-         * Step 2 — Compose the floating-window message (single page)
+         * Step 2 — Compose the floating-window message.
+         *
+         * Each field is formatted as  "LABEL:VALUE UNIT\r\n".
+         * If a field's value is NAN (missing / empty in CSV / header not
+         * found), "---" is shown instead of a number.
          *
          * DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN = 255 bytes (hard SDK limit).
-         * All 24 fields fit by using compact labels and grouping related
-         * values on one line. Worst-case character count verified < 255.
+         * The offset-tracked snprintf loop stops before overflowing.
          * ---------------------------------------------------------------- */
+        int offset = 0;
+
         if (!parsed) {
-            snprintf(message, DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN,
-                     "=== Air Vitals ===\r\n"
-                     "Waiting for data...\r\n"
-                     "File: %s\r\n",
-                     s_isCsvFilePathConfigured ? s_csvFilePath : "(path not set)");
+            offset += snprintf(message + offset,
+                               DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN - offset,
+                               "=== Air Vitals ===\r\n"
+                               "Waiting for data...\r\n"
+                               "File: %s\r\n",
+                               s_isCsvFilePathConfigured ? s_csvFilePath : "(path not set)");
         } else {
-            snprintf(message, DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN,
-                     "%s\r\n"
-                     "T:%.1fC\r\n"
-                     "O3:%.1fppb\r\n"
-                     "I:%.0f\r\n"
-                     "PM:%.0f/cc\r\n"
-                     "MA:%.3f\r\n"
-                     "TECA:%.2fA\r\n"
-                     "TECT:%.1fC\r\n"
-                     "Ti:%.1fC\r\n"
-                     "RHi:%.1f%%\r\n"
-                     "Pi:%.1fmb\r\n"
-                     "RPM:%.0f\r\n",
-                     ts,
-                     f[0],  /* T    - iMet_Temp_C                */
-                     f[1],  /* O3   - POM_Ozone_ppb              */
-                     f[2],  /* I    - Spectro_MaxIntensity        */
-                     f[3],  /* PM   - Partector_Particle_Count    */
-                     f[4],  /* MA   - Aeth_Blue_BlackCarbon       */
-                     f[5],  /* TECA - TEC_Output_Current          */
-                     f[6],  /* TECT - TEC_Object_Temperature      */
-                     f[7],  /* Ti   - Inline_Temp                 */
-                     f[8],  /* RHi  - Inline_Relative_Humidity    */
-                     f[9],  /* Pi   - Inline_Pressure_mbar        */
-                     f[10]); /* RPM  - Pump_RPM                   */
+            /* Timestamp line */
+            offset += snprintf(message + offset,
+                               DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN - offset,
+                               "%s\r\n", ts);
+
+            /* One line per vitals field */
+            int i;
+            for (i = 0; i < VITALS_NUM_FIELDS; i++) {
+                int remaining = DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN - offset;
+                if (remaining <= 1) break;  /* No space left */
+
+                T_VitalsField *fld = &s_vitalsFields[i];
+
+                if (isnan(fld->value)) {
+                    /* Missing / empty field → display "---" */
+                    offset += snprintf(message + offset, remaining,
+                                       "%s:---\r\n", fld->label);
+                } else {
+                    /* Format the numeric value then append label+unit */
+                    char valBuf[32];
+                    snprintf(valBuf, sizeof(valBuf), fld->fmt, fld->value);
+                    offset += snprintf(message + offset, remaining,
+                                       "%s:%s%s\r\n",
+                                       fld->label, valBuf, fld->unit);
+                }
+            }
         }
 
         /* ----------------------------------------------------------------
