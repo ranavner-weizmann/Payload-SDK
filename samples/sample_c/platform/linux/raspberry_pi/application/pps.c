@@ -36,8 +36,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <stdint.h>
-#include <time.h>
-#include <pps.h>
+#include "pps.h"
 #include <pthread.h>
 #include "dji_logger.h"
 #include "osal/osal.h"
@@ -53,6 +52,7 @@ static uint32_t pps_newest_trigger_time_ms = 0;
 static uint32_t pps_trigger_time_diff_ms = 0;
 static int gpio_fd = 0;
 static pthread_t pps_thread;
+static bool pps_has_triggered = false;
 
 /* Private functions declaration ---------------------------------------------*/
 static void *pps_signal_watcher(void *arg);
@@ -133,12 +133,11 @@ T_DjiReturnCode DjiTestRsp_GetNewestPpsTriggerLocalTimeUs(uint64_t *localTimeUs)
         return DJI_ERROR_SYSTEM_MODULE_CODE_INVALID_PARAMETER;
     }
 
-    if (pps_newest_trigger_time_ms == 0) {
-        USER_LOG_WARN("pps have not been triggered.");
+    if (!pps_has_triggered) {
         return DJI_ERROR_SYSTEM_MODULE_CODE_BUSY;
     }
-    *localTimeUs = (uint64_t)pps_newest_trigger_time_ms * 1000ULL;
 
+    *localTimeUs = (uint64_t)pps_newest_trigger_time_ms * 1000ULL;
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
@@ -152,6 +151,7 @@ static void handle_pps_event() {
     }
 
     pps_newest_trigger_time_ms = timeNowMs;
+    pps_has_triggered = true;
 }
 
 static uint32_t get_pps_trigger_time_diff_ms() {

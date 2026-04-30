@@ -27,9 +27,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "test_fc_subscription.h"
 #include "dji_logger.h"
 #include "dji_platform.h"
+#include "dji_time_sync.h"
 #include "widget_interaction_test/test_widget_interaction.h"
 
 /* Private constants ---------------------------------------------------------*/
@@ -53,10 +55,54 @@ static void *UserFcSubscription_Task(void *arg);
 static T_DjiReturnCode DjiTest_FcSubscriptionReceiveQuaternionCallback(const uint8_t *data, uint16_t dataSize,
                                                                        const T_DjiDataTimestamp *timestamp);
 static void WriteCsvRow(FILE *fp,
-                        const T_DjiDataTimestamp *fcTs,
+                        const char *timestamp,
                         double lat, double lon, double alt,
                         double pitch, double roll, double yaw);
+static bool ConvertGpsDateTimeToLocalTimeString(uint32_t gpsDate, uint32_t gpsTime,
+                                                const char *format, char *buffer,
+                                                size_t bufferSize);
 static bool CsvNeedsHeader(const char *path);
+
+static bool ConvertGpsDateTimeToLocalTimeString(uint32_t gpsDate, uint32_t gpsTime,
+                                                const char *format, char *buffer,
+                                                size_t bufferSize)
+{
+    if (buffer == NULL || format == NULL || bufferSize == 0 || gpsDate == 0 || gpsTime == 0) {
+        return false;
+    }
+
+    uint32_t year = gpsDate / 10000;
+    uint32_t month = (gpsDate / 100) % 100;
+    uint32_t day = gpsDate % 100;
+    uint32_t hour = gpsTime / 10000;
+    uint32_t minute = (gpsTime / 100) % 100;
+    uint32_t second = gpsTime % 100;
+
+    struct tm utcTime = {0};
+    utcTime.tm_year = (int)year - 1900;
+    utcTime.tm_mon = (int)month - 1;
+    utcTime.tm_mday = (int)day;
+    utcTime.tm_hour = (int)hour;
+    utcTime.tm_min = (int)minute;
+    utcTime.tm_sec = (int)second;
+    utcTime.tm_isdst = -1;
+
+    time_t rawTime = timegm(&utcTime);
+    if (rawTime == (time_t)-1) {
+        return false;
+    }
+
+    struct tm localTime = {0};
+    if (localtime_r(&rawTime, &localTime) == NULL) {
+        return false;
+    }
+
+    if (strftime(buffer, bufferSize, format, &localTime) == 0) {
+        return false;
+    }
+
+    return true;
+}
 
 /* Private variables ---------------------------------------------------------*/
 static T_DjiTaskHandle s_userFcSubscriptionThread;
@@ -151,6 +197,28 @@ T_DjiReturnCode DjiTest_FcSubscriptionStartService(void)
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     } else {
         USER_LOG_DEBUG("Subscribe topic gps details success.");
+    }
+
+    /* GPS date at 1 Hz — polled in task for drone timestamp */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_DATE,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic gps date error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic gps date success.");
+    }
+
+    /* GPS time at 1 Hz — polled in task for drone timestamp */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_TIME,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic gps time error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic gps time success.");
     }
 
     if (osalHandler->TaskCreate("user_subscription_task", UserFcSubscription_Task,
@@ -283,6 +351,24 @@ T_DjiReturnCode DjiTest_FcSubscriptionRunSample(void)
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
+    djiStat = DjiFcSubscription_UnSubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_DETAILS);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("UnSubscribe topic gps details error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    }
+
+    djiStat = DjiFcSubscription_UnSubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_DATE);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("UnSubscribe topic gps date error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    }
+
+    djiStat = DjiFcSubscription_UnSubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_TIME);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("UnSubscribe topic gps time error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    }
+
     USER_LOG_INFO("--> Step 5: Deinit fc subscription module");
     djiStat = DjiFcSubscription_DeInit();
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
@@ -333,12 +419,12 @@ static bool CsvNeedsHeader(const char *path)
  * formatted as  <millisecond>.<microsecond>  (e.g. "123456789.045").
  */
 static void WriteCsvRow(FILE *fp,
-                        const T_DjiDataTimestamp *fcTs,
+                        const char *timestamp,
                         double lat, double lon, double alt,
                         double pitch, double roll, double yaw)
 {
-    fprintf(fp, "%u.%06u,%.7f,%.7f,%.2f,%.2f,%.2f,%.2f\n",
-            fcTs->millisecond, fcTs->microsecond,
+    fprintf(fp, "%s,%.7f,%.7f,%.2f,%.2f,%.2f,%.2f\n",
+            timestamp,
             lat, lon, alt, pitch, roll, yaw);
     fflush(fp);
 }
@@ -366,12 +452,12 @@ static void WriteCsvRow(FILE *fp,
  */
 static void *UserFcSubscription_Task(void *arg)
 {
-    T_DjiReturnCode            djiStat;
-    T_DjiFcSubscriptionVelocity    velocity    = {0};
+    T_DjiReturnCode              djiStat;
+    T_DjiFcSubscriptionVelocity  velocity    = {0};
     T_DjiFcSubscriptionGpsPosition gpsPosition = {0};
-    T_DjiFcSubscriptionGpsDetails  gpsDetails  = {0};
-    T_DjiDataTimestamp             timestamp   = {0};
-    T_DjiOsalHandler              *osalHandler = DjiPlatform_GetOsalHandler();
+    T_DjiFcSubscriptionGpsDetails gpsDetails  = {0};
+    T_DjiDataTimestamp           timestamp   = {0};
+    T_DjiOsalHandler            *osalHandler = DjiPlatform_GetOsalHandler();
 
     USER_UTIL_UNUSED(arg);
 
@@ -439,16 +525,45 @@ static void *UserFcSubscription_Task(void *arg)
             double yaw   = s_yaw;
             osalHandler->MutexUnlock(s_eulerMutex);
 
+            /* Get GPS date/time for the CSV timestamp */
+            char gpsTimestamp[32] = "";
+            T_DjiFcSubscriptionGpsDate gpsDate = 0;
+            T_DjiFcSubscriptionGpsTime gpsTime = 0;
+            T_DjiDataTimestamp ts = {0};
+
+            T_DjiReturnCode pollStat = DjiFcSubscription_GetLatestValueOfTopic(
+                DJI_FC_SUBSCRIPTION_TOPIC_GPS_DATE, (uint8_t *)&gpsDate,
+                sizeof(T_DjiFcSubscriptionGpsDate), &ts);
+            if (pollStat == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && gpsDate != 0) {
+                pollStat = DjiFcSubscription_GetLatestValueOfTopic(
+                    DJI_FC_SUBSCRIPTION_TOPIC_GPS_TIME, (uint8_t *)&gpsTime,
+                    sizeof(T_DjiFcSubscriptionGpsTime), &ts);
+                if (pollStat == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && gpsTime != 0 &&
+                    ConvertGpsDateTimeToLocalTimeString(gpsDate, gpsTime,
+                                                       "%Y-%m-%d %H:%M:%S",
+                                                       gpsTimestamp, sizeof(gpsTimestamp))) {
+                    // valid GPS row timestamp
+                } else {
+                    USER_LOG_ERROR("unable to get valid GPS datetime for row timestamp, using FC time");
+                    snprintf(gpsTimestamp, sizeof(gpsTimestamp), "%u.%06u",
+                             timestamp.millisecond, timestamp.microsecond);
+                }
+            } else {
+                USER_LOG_ERROR("poll GPS date error for row timestamp, using FC time");
+                snprintf(gpsTimestamp, sizeof(gpsTimestamp), "%u.%06u",
+                         timestamp.millisecond, timestamp.microsecond);
+            }
+
             /* Open in append mode — creates the file if it doesn't exist */
             bool   writeHeader = CsvNeedsHeader(s_csvOutputPath);
             FILE  *fp          = fopen(s_csvOutputPath, "a");
             if (fp != NULL) {
                 if (writeHeader) {
-                    fprintf(fp, "fc_timestamp,latitude_deg,longitude_deg,"
+                    fprintf(fp, "timestamp,latitude_deg,longitude_deg,"
                                 "altitude_m,pitch_deg,roll_deg,yaw_deg\n");
                 }
-                /* Pass the FC timestamp from the GPS position poll */
-                WriteCsvRow(fp, &timestamp, lat, lon, alt, pitch, roll, yaw);
+
+                WriteCsvRow(fp, gpsTimestamp, lat, lon, alt, pitch, roll, yaw);
                 fclose(fp);
             } else {
                 USER_LOG_ERROR("Cannot open telemetry CSV: %s", s_csvOutputPath);

@@ -29,6 +29,8 @@
 #include <utils/util_misc.h>
 #include <errno.h>
 #include <signal.h>
+#include <string.h>
+#include <time.h>
 #include <power_management/test_power_management.h>
 #include <gimbal_emu/test_payload_gimbal_emu.h>
 #include <fc_subscription/test_fc_subscription.h>
@@ -55,6 +57,8 @@
 #include "widget/test_widget.h"
 #include "data_transmission/test_data_transmission.h"
 #include "tethered_battery/test_tethered_battery.h"
+#include "time_sync/test_time_sync.h"
+#include "pps.h"
 #include "dji_sdk_config.h"
 
 /* Private constants ---------------------------------------------------------*/
@@ -70,8 +74,10 @@
 /* Path to the live sensor CSV written by the air system (read by widget) */
 #define TRANSMITTED_CSV_PATH        "/home/rsp/drone_air_system/data_to_sdk/vitals.csv"
 
-/* Path where the drone telemetry CSV will be saved (written by FC subscription) */
-#define DRONE_TELEMETRY_CSV_PATH    "/home/rsp/drone_air_system/data_from_drone/telemetry.csv"
+/* Path where the drone telemetry CSV will be saved (written by FC subscription).
+ * A timestamp is appended to avoid overwriting across restarts.
+ */
+#define DRONE_TELEMETRY_CSV_BASE_PATH    "/home/rsp/drone_air_system/data_from_drone/telemetry_"
 
 /* Private types -------------------------------------------------------------*/
 typedef struct {
@@ -96,6 +102,48 @@ static void *DjiUser_MonitorTask(void *argument);
 static T_DjiReturnCode DjiTest_HighPowerApplyPinInit();
 static T_DjiReturnCode DjiTest_WriteHighPowerApplyPin(E_DjiPowerManagementPinState pinState);
 static void DjiUser_NormalExitHandler(int signalNum);
+static bool ConvertGpsDateTimeToLocalFileName(uint32_t gpsDate, uint32_t gpsTime,
+                                              char *buffer, size_t bufferSize);
+
+static bool ConvertGpsDateTimeToLocalFileName(uint32_t gpsDate, uint32_t gpsTime,
+                                              char *buffer, size_t bufferSize)
+{
+    if (buffer == NULL || bufferSize == 0 || gpsDate == 0 || gpsTime == 0) {
+        return false;
+    }
+
+    uint32_t year = gpsDate / 10000;
+    uint32_t month = (gpsDate / 100) % 100;
+    uint32_t day = gpsDate % 100;
+    uint32_t hour = gpsTime / 10000;
+    uint32_t minute = (gpsTime / 100) % 100;
+    uint32_t second = gpsTime % 100;
+
+    struct tm utcTime = {0};
+    utcTime.tm_year = (int)year - 1900;
+    utcTime.tm_mon = (int)month - 1;
+    utcTime.tm_mday = (int)day;
+    utcTime.tm_hour = (int)hour;
+    utcTime.tm_min = (int)minute;
+    utcTime.tm_sec = (int)second;
+    utcTime.tm_isdst = -1;
+
+    time_t rawTime = timegm(&utcTime);
+    if (rawTime == (time_t)-1) {
+        return false;
+    }
+
+    struct tm localTime = {0};
+    if (localtime_r(&rawTime, &localTime) == NULL) {
+        return false;
+    }
+
+    if (strftime(buffer, bufferSize, "%Y%m%d_%H%M%S", &localTime) == 0) {
+        return false;
+    }
+
+    return true;
+}
 
 /* Exported functions definition ---------------------------------------------*/
 int main(int argc, char **argv)
@@ -192,6 +240,91 @@ int main(int argc, char **argv)
         }
     #endif
 
+    if (!(aircraftInfoBaseInfo.mountPosition == DJI_MOUNT_POSITION_EXTENSION_PORT &&
+          (aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M300_RTK ||
+           aircraftInfoBaseInfo.aircraftType == DJI_AIRCRAFT_TYPE_M350_RTK))) {
+        #if CONFIG_MODULE_SAMPLE_FC_SUBSCRIPTION_ON
+            {
+                T_DjiTestTimeSyncHandler timeSyncHandler = {
+                    .PpsSignalResponseInit = DjiTestRsp_PpsSignalResponseInit,
+                    .GetNewestPpsTriggerLocalTimeUs = DjiTestRsp_GetNewestPpsTriggerLocalTimeUs,
+                };
+
+                returnCode = DjiTest_TimeSyncRegHandler(&timeSyncHandler);
+                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                    USER_LOG_ERROR("time sync register handler error");
+                } else {
+                    returnCode = DjiTest_TimeSyncStartService();
+                    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                        USER_LOG_ERROR("time sync start error");
+                    }
+                }
+            }
+
+            returnCode = DjiTest_FcSubscriptionStartService();
+            if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                USER_LOG_ERROR("data subscription sample init error\n");
+            }
+
+            {
+                T_DjiFcSubscriptionGpsDate gpsDate = 0;
+                T_DjiFcSubscriptionGpsTime gpsTime = 0;
+                T_DjiDataTimestamp timestamp = {0};
+                char droneTelemetryCsvPath[256] = {0};
+                char fileTimestamp[32] = {0};
+                T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
+                bool haveDroneTime = false;
+                uint32_t tries = 0;
+
+                while (tries < 10) {
+                    T_DjiReturnCode pollStat = DjiFcSubscription_GetLatestValueOfTopic(
+                        DJI_FC_SUBSCRIPTION_TOPIC_GPS_DATE, (uint8_t *)&gpsDate,
+                        sizeof(T_DjiFcSubscriptionGpsDate), &timestamp);
+                    if (pollStat == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && gpsDate != 0) {
+                        pollStat = DjiFcSubscription_GetLatestValueOfTopic(
+                            DJI_FC_SUBSCRIPTION_TOPIC_GPS_TIME, (uint8_t *)&gpsTime,
+                            sizeof(T_DjiFcSubscriptionGpsTime), &timestamp);
+                        if (pollStat == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && gpsTime != 0) {
+                            if (ConvertGpsDateTimeToLocalFileName(gpsDate, gpsTime,
+                                                                  fileTimestamp,
+                                                                  sizeof(fileTimestamp))) {
+                                haveDroneTime = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (osalHandler != NULL) {
+                        osalHandler->TaskSleepMs(300);
+                    }
+                    tries++;
+                }
+
+                if (haveDroneTime) {
+                    snprintf(droneTelemetryCsvPath, sizeof(droneTelemetryCsvPath),
+                             DRONE_TELEMETRY_CSV_BASE_PATH "%s.csv", fileTimestamp);
+                }
+
+                if (!haveDroneTime) {
+                    USER_LOG_ERROR("unable to get valid GPS datetime for telemetry filename, using Pi time");
+                    time_t now = time(NULL);
+                    struct tm *timeInfo = localtime(&now);
+                    if (timeInfo != NULL) {
+                        strftime(droneTelemetryCsvPath, sizeof(droneTelemetryCsvPath),
+                                 DRONE_TELEMETRY_CSV_BASE_PATH "%Y%m%d_%H%M%S.csv",
+                                 timeInfo);
+                    } else {
+                        snprintf(droneTelemetryCsvPath, sizeof(droneTelemetryCsvPath),
+                                 DRONE_TELEMETRY_CSV_BASE_PATH "unknown_time.csv");
+                    }
+                }
+
+                USER_LOG_INFO("Telemetry CSV path: %s", droneTelemetryCsvPath);
+                DjiTest_FcSubscriptionSetCsvOutputPath(droneTelemetryCsvPath);
+            }
+        #endif
+    }
+
     #if CONFIG_MODULE_SAMPLE_DATA_TRANSMISSION_ON
         returnCode = DjiTest_DataTransmissionStartService();
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
@@ -200,6 +333,7 @@ int main(int argc, char **argv)
     #endif
 
     #if CONFIG_MODULE_SAMPLE_WIDGET_ON
+
         returnCode = DjiTest_WidgetInteractionStartService();
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("widget sample init error");
@@ -232,15 +366,6 @@ int main(int argc, char **argv)
             returnCode = DjiTest_CameraEmuMediaStartService();
             if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
                 USER_LOG_ERROR("camera emu media init error");
-            }
-        #endif
-
-        #if CONFIG_MODULE_SAMPLE_FC_SUBSCRIPTION_ON
-            DjiTest_FcSubscriptionSetCsvOutputPath(DRONE_TELEMETRY_CSV_PATH);
-
-            returnCode = DjiTest_FcSubscriptionStartService();
-            if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-                USER_LOG_ERROR("data subscription sample init error\n");
             }
         #endif
 

@@ -31,6 +31,8 @@
 #include "utils/util_misc.h"
 #include "dji_platform.h"
 
+extern T_DjiReturnCode DjiTest_TimeSyncGetNewestPpsTriggerLocalTimeUs(uint64_t *localTimeUs);
+
 /* Private constants ---------------------------------------------------------*/
 #define DJI_TEST_TIME_SYNC_TASK_FREQ            (1)
 #define DJI_TEST_TIME_SYNC_TASK_STACK_SIZE      (1024)
@@ -96,17 +98,17 @@ T_DjiReturnCode DjiTest_TimeSyncStartService(void)
         return djiStat;
     }
 
+    djiStat = s_timeSyncHandler.PpsSignalResponseInit();
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("pps signal response init error");
+        return djiStat;
+    }
+
     if (osalHandler->TaskCreate("user_time_sync_task", DjiTest_TimeSyncTask,
                                 DJI_TEST_TIME_SYNC_TASK_STACK_SIZE, NULL, &s_timeSyncThread) !=
         DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("user time sync task create error.");
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
-    }
-
-    djiStat = s_timeSyncHandler.PpsSignalResponseInit();
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("pps signal response init error");
-        return djiStat;
     }
 
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
@@ -151,6 +153,16 @@ static void *DjiTest_TimeSyncTask(void *arg)
         djiStat = osalHandler->GetTimeMs(&currentTimeMs);
         if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("get current time error: 0x%08llX.", djiStat);
+            continue;
+        }
+
+        uint64_t ppsTimeUs;
+        djiStat = DjiTest_TimeSyncGetNewestPpsTriggerLocalTimeUs(&ppsTimeUs);
+        if (djiStat == DJI_ERROR_SYSTEM_MODULE_CODE_BUSY) {
+            USER_LOG_WARN("PPS not triggered yet; waiting for first PPS event before transferring time.");
+            continue;
+        } else if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("get PPS trigger time error: 0x%08llX.", djiStat);
             continue;
         }
 

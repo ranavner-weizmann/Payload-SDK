@@ -32,12 +32,23 @@
 #include "dji_high_speed_data_channel.h"
 #include "dji_aircraft_info.h"
 #include "widget_interaction_test/test_widget_interaction.h"
+#include "dji_fc_subscription.h"
+#include <string.h>
+#include <time.h>
 
 /* Private constants ---------------------------------------------------------*/
 #define DATA_TRANSMISSION_TASK_FREQ         (1)
 #define DATA_TRANSMISSION_TASK_STACK_SIZE   (2048)
+#define DATA_TRANSMISSION_CSV_BASE_PATH     "/home/rsp/drone_air_system/data_from_drone/real_time_labels_"
+#define DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN (256)
+#define DATA_TRANSMISSION_CSV_QUEUE_SIZE    (32)
 
 /* Private types -------------------------------------------------------------*/
+typedef struct {
+    char text[DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN];
+    uint16_t len;
+} T_DjiDataTransmissionCsvEntry;
+
 typedef struct {
     E_DjiChannelAddress channelAddress;
     T_DjiReturnCode (*callback)(const uint8_t *data, uint16_t len);
@@ -52,15 +63,25 @@ static T_DjiReturnCode ReceiveDataFromPayload(const uint8_t *data, uint16_t len)
 static T_DjiReturnCode ReceiveDataFromPayload1(const uint8_t *data, uint16_t len);
 static T_DjiReturnCode ReceiveDataFromPayload2(const uint8_t *data, uint16_t len);
 static T_DjiReturnCode ReceiveDataFromPayload3(const uint8_t *data, uint16_t len);
-
 static T_DjiReturnCode ReceiveDataFromPayload4(const uint8_t *data, uint16_t len);
 static T_DjiReturnCode ReceiveDataFromPayload5(const uint8_t *data, uint16_t len);
 static T_DjiReturnCode ReceiveDataFromPayload6(const uint8_t *data, uint16_t len);
 static T_DjiReturnCode ReceiveDataFromPayload7(const uint8_t *data, uint16_t len);
 static T_DjiReturnCode ReceiveDataFromPayload8(const uint8_t *data, uint16_t len);
+static T_DjiReturnCode DataTransmission_InitCsvLogger(void);
+static void DataTransmission_ProcessCsvQueue(void);
+static void DataTransmission_EnqueueCsvLine(const uint8_t *data, uint16_t len);
+static T_DjiReturnCode DataTransmission_WriteCsvEntry(const char *text);
+static void DataTransmission_EscapeCsvField(const char *src, char *dst, size_t dstSize);
 /* Private variables ---------------------------------------------------------*/
 static T_DjiTaskHandle s_userDataTransmissionThread;
 static T_DjiAircraftInfoBaseInfo s_aircraftInfoBaseInfo;
+static T_DjiMutexHandle s_csvQueueMutex = {0};
+static T_DjiDataTransmissionCsvEntry s_csvQueue[DATA_TRANSMISSION_CSV_QUEUE_SIZE];
+static uint16_t s_csvQueueHead = 0;
+static uint16_t s_csvQueueTail = 0;
+static uint16_t s_csvQueueCount = 0;
+static char s_csvPath[256];
 
 static const ChannelCallbackEntry g_channelCallbacks[] = {
     {DJI_CHANNEL_ADDRESS_PAYLOAD_PORT_NO1, ReceiveDataFromPayload1},
@@ -93,6 +114,12 @@ T_DjiReturnCode DjiTest_DataTransmissionStartService(void)
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("get aircraft base info error");
         return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
+    }
+
+    djiStat = DataTransmission_InitCsvLogger();
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("init csv logger error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
     channelAddress = DJI_CHANNEL_ADDRESS_MASTER_RC_APP;
@@ -199,6 +226,12 @@ T_DjiReturnCode DjiTest_DataTransmissionStopService(void)
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
+    DataTransmission_ProcessCsvQueue();
+
+    if (osalHandler->MutexDestroy(s_csvQueueMutex) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("destroy csv queue mutex failed.");
+    }
+
     returnCode = DjiLowSpeedDataChannel_DeInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("deinit data transmission module error.");
@@ -215,6 +248,264 @@ T_DjiReturnCode DjiTest_DataTransmissionStopService(void)
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #endif
 
+static bool ConvertGpsDateTimeToLocalTimeString(uint32_t gpsDate, uint32_t gpsTime,
+                                                  const char *format, char *buffer, size_t bufferSize)
+{
+    if (buffer == NULL || format == NULL || bufferSize == 0 || gpsDate == 0 || gpsTime == 0) {
+        return false;
+    }
+
+    uint32_t year = gpsDate / 10000;
+    uint32_t month = (gpsDate / 100) % 100;
+    uint32_t day = gpsDate % 100;
+    uint32_t hour = gpsTime / 10000;
+    uint32_t minute = (gpsTime / 100) % 100;
+    uint32_t second = gpsTime % 100;
+
+    struct tm utcTime = {0};
+    utcTime.tm_year = (int)year - 1900;
+    utcTime.tm_mon = (int)month - 1;
+    utcTime.tm_mday = (int)day;
+    utcTime.tm_hour = (int)hour;
+    utcTime.tm_min = (int)minute;
+    utcTime.tm_sec = (int)second;
+    utcTime.tm_isdst = -1;
+
+    time_t rawTime = timegm(&utcTime);
+    if (rawTime == (time_t)-1) {
+        return false;
+    }
+
+    struct tm localTime = {0};
+    if (localtime_r(&rawTime, &localTime) == NULL) {
+        return false;
+    }
+
+    if (strftime(buffer, bufferSize, format, &localTime) == 0) {
+        return false;
+    }
+
+    return true;
+}
+
+static T_DjiReturnCode DataTransmission_InitCsvLogger(void)
+{
+    T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
+
+    if (osalHandler == NULL) {
+        return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
+    }
+
+    if (osalHandler->MutexCreate(&s_csvQueueMutex) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("create csv queue mutex failed.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
+    }
+
+    // Generate timestamped CSV path using GPS date/time
+    T_DjiFcSubscriptionGpsDate gpsDate = 0;
+    T_DjiFcSubscriptionGpsTime gpsTime = 0;
+    T_DjiDataTimestamp timestamp = {0};
+    char timestampPart[32] = {0};
+    bool haveGpsTime = false;
+    uint32_t tries = 0;
+
+    while (tries < 10) {
+        T_DjiReturnCode pollStat = DjiFcSubscription_GetLatestValueOfTopic(
+            DJI_FC_SUBSCRIPTION_TOPIC_GPS_DATE, (uint8_t *)&gpsDate,
+            sizeof(T_DjiFcSubscriptionGpsDate), &timestamp);
+        if (pollStat == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && gpsDate != 0) {
+            pollStat = DjiFcSubscription_GetLatestValueOfTopic(
+                DJI_FC_SUBSCRIPTION_TOPIC_GPS_TIME, (uint8_t *)&gpsTime,
+                sizeof(T_DjiFcSubscriptionGpsTime), &timestamp);
+            if (pollStat == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && gpsTime != 0) {
+                if (ConvertGpsDateTimeToLocalTimeString(gpsDate, gpsTime,
+                                                       "%Y%m%d_%H%M%S", timestampPart,
+                                                       sizeof(timestampPart))) {
+                    haveGpsTime = true;
+                    break;
+                }
+            }
+        }
+
+        osalHandler->TaskSleepMs(300);
+        tries++;
+    }
+
+    if (!haveGpsTime) {
+        USER_LOG_ERROR("unable to get valid GPS datetime for transmission filename, using Pi time");
+        time_t now = time(NULL);
+        struct tm *timeInfo = localtime(&now);
+        if (timeInfo != NULL) {
+            strftime(s_csvPath, sizeof(s_csvPath), DATA_TRANSMISSION_CSV_BASE_PATH "%Y%m%d_%H%M%S.csv",
+                     timeInfo);
+        } else {
+            snprintf(s_csvPath, sizeof(s_csvPath), DATA_TRANSMISSION_CSV_BASE_PATH "unknown_time.csv");
+        }
+    } else {
+        snprintf(s_csvPath, sizeof(s_csvPath), DATA_TRANSMISSION_CSV_BASE_PATH "%s.csv", timestampPart);
+    }
+
+    s_csvQueueHead = 0;
+    s_csvQueueTail = 0;
+    s_csvQueueCount = 0;
+
+    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+}
+
+static void DataTransmission_EscapeCsvField(const char *src, char *dst, size_t dstSize)
+{
+    size_t srcIndex = 0;
+    size_t dstIndex = 0;
+
+    if (dstSize < 3) {
+        return;
+    }
+
+    dst[dstIndex++] = '"';
+    while (src[srcIndex] != '\0' && dstIndex + 2 < dstSize) {
+        char ch = src[srcIndex++];
+        if (ch == '"') {
+            if (dstIndex + 3 >= dstSize) {
+                break;
+            }
+            dst[dstIndex++] = '"';
+            dst[dstIndex++] = '"';
+        } else if (ch == '\r' || ch == '\n') {
+            dst[dstIndex++] = ' ';
+        } else {
+            dst[dstIndex++] = ch;
+        }
+    }
+
+    if (dstIndex + 1 < dstSize) {
+        dst[dstIndex++] = '"';
+    }
+
+    if (dstIndex < dstSize) {
+        dst[dstIndex] = '\0';
+    } else {
+        dst[dstSize - 1] = '\0';
+    }
+}
+
+static T_DjiReturnCode DataTransmission_WriteCsvEntry(const char *text)
+{
+    FILE *csvFile = fopen(s_csvPath, "a+");
+    if (csvFile == NULL) {
+        USER_LOG_ERROR("open csv file failed.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
+    }
+
+    if (fseek(csvFile, 0, SEEK_END) != 0) {
+        USER_LOG_ERROR("seek csv file end failed.");
+        fclose(csvFile);
+        return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
+    }
+
+    if (ftell(csvFile) == 0) {
+        fprintf(csvFile, "timestamp,text\n");
+    }
+
+    char timestamp[32] = "";
+    T_DjiFcSubscriptionGpsDate gpsDate = 0;
+    T_DjiFcSubscriptionGpsTime gpsTime = 0;
+    T_DjiDataTimestamp ts = {0};
+    bool haveGpsTime = false;
+
+    T_DjiReturnCode pollStat = DjiFcSubscription_GetLatestValueOfTopic(
+        DJI_FC_SUBSCRIPTION_TOPIC_GPS_DATE, (uint8_t *)&gpsDate,
+        sizeof(T_DjiFcSubscriptionGpsDate), &ts);
+    if (pollStat == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && gpsDate != 0) {
+        pollStat = DjiFcSubscription_GetLatestValueOfTopic(
+            DJI_FC_SUBSCRIPTION_TOPIC_GPS_TIME, (uint8_t *)&gpsTime,
+            sizeof(T_DjiFcSubscriptionGpsTime), &ts);
+        if (pollStat == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && gpsTime != 0) {
+            haveGpsTime = ConvertGpsDateTimeToLocalTimeString(gpsDate, gpsTime,
+                                                             "%Y-%m-%d %H:%M:%S",
+                                                             timestamp, sizeof(timestamp));
+        }
+    }
+
+    if (!haveGpsTime) {
+        USER_LOG_ERROR("unable to get valid GPS datetime for row timestamp, using Pi time");
+        time_t now = time(NULL);
+        struct tm *timeInfo = localtime(&now);
+        if (timeInfo != NULL) {
+            strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeInfo);
+        }
+    }
+
+    char escapedText[DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN * 2 + 3];
+    DataTransmission_EscapeCsvField(text, escapedText, sizeof(escapedText));
+    fprintf(csvFile, "%s,%s\n", timestamp, escapedText);
+    fflush(csvFile);
+    fclose(csvFile);
+
+    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+}
+
+static void DataTransmission_ProcessCsvQueue(void)
+{
+    T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
+    if (osalHandler == NULL) {
+        return;
+    }
+
+    while (1) {
+        if (osalHandler->MutexLock(s_csvQueueMutex) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            return;
+        }
+
+        if (s_csvQueueCount == 0) {
+            osalHandler->MutexUnlock(s_csvQueueMutex);
+            break;
+        }
+
+        char text[DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN];
+        uint16_t entryLen = s_csvQueue[s_csvQueueHead].len;
+        memcpy(text, s_csvQueue[s_csvQueueHead].text, entryLen);
+        text[entryLen] = '\0';
+
+        s_csvQueueHead = (s_csvQueueHead + 1) % DATA_TRANSMISSION_CSV_QUEUE_SIZE;
+        s_csvQueueCount--;
+        osalHandler->MutexUnlock(s_csvQueueMutex);
+
+        if (DataTransmission_WriteCsvEntry(text) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("write csv entry failed.");
+        }
+    }
+}
+
+static void DataTransmission_EnqueueCsvLine(const uint8_t *data, uint16_t len)
+{
+    T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
+    if (osalHandler == NULL || data == NULL || len == 0) {
+        return;
+    }
+
+    if (osalHandler->MutexLock(s_csvQueueMutex) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        return;
+    }
+
+    if (s_csvQueueCount >= DATA_TRANSMISSION_CSV_QUEUE_SIZE) {
+        osalHandler->MutexUnlock(s_csvQueueMutex);
+        USER_LOG_ERROR("csv queue full, drop incoming text.");
+        return;
+    }
+
+    uint16_t copyLen = len;
+    if (copyLen >= DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN) {
+        copyLen = DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN - 1;
+    }
+
+    memcpy(s_csvQueue[s_csvQueueTail].text, data, copyLen);
+    s_csvQueue[s_csvQueueTail].text[copyLen] = '\0';
+    s_csvQueue[s_csvQueueTail].len = copyLen;
+    s_csvQueueTail = (s_csvQueueTail + 1) % DATA_TRANSMISSION_CSV_QUEUE_SIZE;
+    s_csvQueueCount++;
+    osalHandler->MutexUnlock(s_csvQueueMutex);
+}
+
 static void *UserDataTransmission_Task(void *arg)
 {
     T_DjiReturnCode djiStat;
@@ -227,6 +518,8 @@ static void *UserDataTransmission_Task(void *arg)
 
     while (1) {
         osalHandler->TaskSleepMs(1000 / DATA_TRANSMISSION_TASK_FREQ);
+
+        DataTransmission_ProcessCsvQueue();
 
         channelAddress = DJI_CHANNEL_ADDRESS_MASTER_RC_APP;
         djiStat = DjiLowSpeedDataChannel_SendData(channelAddress, dataToBeSent, sizeof(dataToBeSent));
@@ -358,6 +651,7 @@ static T_DjiReturnCode ReceiveDataFromMobile(const uint8_t *data, uint16_t len)
     printData[len] = '\0';
     USER_LOG_INFO("receive data from mobile: %s, len:%d.", printData, len);
     DjiTest_WidgetLogAppend("receive data: %s, len:%d.", printData, len);
+    DataTransmission_EnqueueCsvLine(data, len);
 
     osalHandler->Free(printData);
 
