@@ -99,18 +99,18 @@ static T_DjiTestWidgetLog s_djiTestWidgetLog[WIDGET_LOG_LINE_MAX_NUM] = {0};
  * colIndex and value are managed at runtime — do not edit those fields.
  * ========================================================================= */
 static T_VitalsField s_vitalsFields[VITALS_NUM_FIELDS] = {
-    /* csvHeader                          label    unit   fmt     colIndex  value */
-    { "iMet_Temp_C",                      "T",     "C",   "%.1f", -1,       NAN   },
-    { "POM_Ozone_ppb",                    "O3",    "ppb", "%.1f", -1,       NAN   },
-    { "Spectro_MaxIntensity",             "I",     "",    "%.0f", -1,       NAN   },
-    { "Partector_Particle_Count_#/cm3",   "PM",    "/cc", "%.0f", -1,       NAN   },
-    { "Aeth_Blue_BlackCarbon",            "MA",    "",    "%.3f", -1,       NAN   },
-    { "TEC_Output_Current",               "TECA",  "A",   "%.2f", -1,       NAN   },
-    { "TEC_Object_Temperature",           "TECT",  "C",   "%.1f", -1,       NAN   },
-    { "Inline_Temp",                      "Ti",    "C",   "%.1f", -1,       NAN   },
-    { "Inline_Relative_Humidity",         "RHi",   "%",   "%.1f", -1,       NAN   },
-    { "Inline_Pressure_mbar",             "Pi",    "mb",  "%.1f", -1,       NAN   },
-    { "Pump_RPM",                         "RPM",   "",    "%.0f", -1,       NAN   },
+    /* csvHeader   label    unit   fmt     colIndex  value */
+    { "T",         "T",     " C",   "%.1f", -1,       NAN   },  /* imet    → temp              */
+    { "O3",        "O3",    " ppb", "%.1f", -1,       NAN   },  /* pom     → Ozone_ppb         */
+    { "I",         "I",     "",    "%.0f", -1,       NAN   },  /* spectro → 455.1949          */
+    { "MC",        "MC",    " ug/m3", "%.2f", -1,       NAN   },  /* partector2pro               */
+    { "MA",        "MA",    "",    "%.3f", -1,       NAN   },  /* miniaeth → blue_BCc         */
+    { "TECA",      "TECA",  " A",   "%.2f", -1,       NAN   },  /* cavity  → TEC_ActualOutputCurrent */
+    { "TECT",      "TECT",  " C",   "%.1f", -1,       NAN   },  /* cavity  → TEC_ObjectTemperature   */
+    { "Ti",        "Ti",    " C",   "%.1f", -1,       NAN   },  /* cavity  → temp_c            */
+    { "RHi",       "RHi",   " %",   "%.1f", -1,       NAN   },  /* cavity  → humidity_pct      */
+    { "Pi",        "Pi",    " mb",  "%.1f", -1,       NAN   },  /* cavity  → pressure_mb       */
+    { "RPM",       "RPM",   "",    "%.0f", -1,       NAN   },  /* cavity  → pump_rpm          */
 };
 
 /* Set to true once the header row has been successfully parsed */
@@ -470,6 +470,10 @@ void *DjiTest_WidgetTask(void *arg)
 
                 if (lastDataLine[0] != '\0') {
                     parsed = ParseVitalsDataLine(lastDataLine, ts, sizeof(ts));
+                    /* Temperature is stored *100 in the CSV — correct it here */
+                    if (parsed && !isnan(s_vitalsFields[0].value)) {
+                        s_vitalsFields[0].value /= 100.0f;
+                    }
                 }
             } else {
                 USER_LOG_WARN("Cannot open CSV: %s", s_csvFilePath);

@@ -26,7 +26,6 @@
 #include <utils/util_misc.h>
 #include <math.h>
 #include <stdio.h>
-#include <time.h>
 #include <string.h>
 #include "test_fc_subscription.h"
 #include "dji_logger.h"
@@ -54,6 +53,7 @@ static void *UserFcSubscription_Task(void *arg);
 static T_DjiReturnCode DjiTest_FcSubscriptionReceiveQuaternionCallback(const uint8_t *data, uint16_t dataSize,
                                                                        const T_DjiDataTimestamp *timestamp);
 static void WriteCsvRow(FILE *fp,
+                        const T_DjiDataTimestamp *fcTs,
                         double lat, double lon, double alt,
                         double pitch, double roll, double yaw);
 static bool CsvNeedsHeader(const char *path);
@@ -328,19 +328,18 @@ static bool CsvNeedsHeader(const char *path)
 /*
  * WriteCsvRow — appends one data row to the telemetry CSV.
  * The file pointer must already be open in append mode ("a").
+ *
+ * The timestamp comes directly from the FC via T_DjiDataTimestamp and is
+ * formatted as  <millisecond>.<microsecond>  (e.g. "123456789.045").
  */
 static void WriteCsvRow(FILE *fp,
+                        const T_DjiDataTimestamp *fcTs,
                         double lat, double lon, double alt,
                         double pitch, double roll, double yaw)
 {
-    /* Wall-clock timestamp in ISO-8601 format */
-    time_t     now  = time(NULL);
-    struct tm *t    = localtime(&now);
-    char       ts[32];
-    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", t);
-
-    fprintf(fp, "%s,%.7f,%.7f,%.2f,%.2f,%.2f,%.2f\n",
-            ts, lat, lon, alt, pitch, roll, yaw);
+    fprintf(fp, "%u.%06u,%.7f,%.7f,%.2f,%.2f,%.2f,%.2f\n",
+            fcTs->millisecond, fcTs->microsecond,
+            lat, lon, alt, pitch, roll, yaw);
     fflush(fp);
 }
 
@@ -359,8 +358,11 @@ static void WriteCsvRow(FILE *fp,
  *   3. Appends one row to the telemetry CSV on the Raspberry Pi.
  *
  * CSV columns:
- *   timestamp, latitude_deg, longitude_deg, altitude_m,
+ *   fc_timestamp, latitude_deg, longitude_deg, altitude_m,
  *   pitch_deg, roll_deg, yaw_deg
+ *
+ * fc_timestamp is formatted as <millisecond>.<microsecond> from the FC clock,
+ * sourced from the GPS position topic poll.
  */
 static void *UserFcSubscription_Task(void *arg)
 {
@@ -391,7 +393,7 @@ static void *UserFcSubscription_Task(void *arg)
                           velocity.data.z, velocity.health);
         }
 
-        /* ---- Poll GPS position ---- */
+        /* ---- Poll GPS position — timestamp captured here for CSV ---- */
         djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION,
                                                           (uint8_t *) &gpsPosition,
                                                           sizeof(T_DjiFcSubscriptionGpsPosition),
@@ -442,10 +444,11 @@ static void *UserFcSubscription_Task(void *arg)
             FILE  *fp          = fopen(s_csvOutputPath, "a");
             if (fp != NULL) {
                 if (writeHeader) {
-                    fprintf(fp, "timestamp,latitude_deg,longitude_deg,"
+                    fprintf(fp, "fc_timestamp,latitude_deg,longitude_deg,"
                                 "altitude_m,pitch_deg,roll_deg,yaw_deg\n");
                 }
-                WriteCsvRow(fp, lat, lon, alt, pitch, roll, yaw);
+                /* Pass the FC timestamp from the GPS position poll */
+                WriteCsvRow(fp, &timestamp, lat, lon, alt, pitch, roll, yaw);
                 fclose(fp);
             } else {
                 USER_LOG_ERROR("Cannot open telemetry CSV: %s", s_csvOutputPath);
