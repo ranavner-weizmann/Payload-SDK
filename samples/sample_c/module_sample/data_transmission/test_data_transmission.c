@@ -35,6 +35,8 @@
 #include "dji_fc_subscription.h"
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* Private constants ---------------------------------------------------------*/
 #define DATA_TRANSMISSION_TASK_FREQ         (1)
@@ -301,6 +303,16 @@ static T_DjiReturnCode DataTransmission_InitCsvLogger(void)
         return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
     }
 
+    // Create data_from_drone directory if it doesn't exist
+    const char *dataDir = "/home/rsp/drone_air_system/data_from_drone";
+    if (access(dataDir, F_OK) != 0) {
+        if (mkdir(dataDir, 0755) != 0) {
+            USER_LOG_ERROR("Failed to create data_from_drone directory.");
+            return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
+        }
+        USER_LOG_INFO("Created data_from_drone directory.");
+    }
+
     // Generate timestamped CSV path using GPS date/time
     T_DjiFcSubscriptionGpsDate gpsDate = 0;
     T_DjiFcSubscriptionGpsTime gpsTime = 0;
@@ -403,10 +415,11 @@ static T_DjiReturnCode DataTransmission_WriteCsvEntry(const char *text)
     }
 
     if (ftell(csvFile) == 0) {
-        fprintf(csvFile, "timestamp,text\n");
+        fprintf(csvFile, "timestamp,pi_timestamp,text\n");
     }
 
     char timestamp[32] = "";
+    char piTimestamp[32] = "";
     T_DjiFcSubscriptionGpsDate gpsDate = 0;
     T_DjiFcSubscriptionGpsTime gpsTime = 0;
     T_DjiDataTimestamp ts = {0};
@@ -435,9 +448,18 @@ static T_DjiReturnCode DataTransmission_WriteCsvEntry(const char *text)
         }
     }
 
+    // Capture Raspberry Pi's system time from timedatectl
+    time_t piNow = time(NULL);
+    struct tm *piTimeInfo = localtime(&piNow);
+    if (piTimeInfo != NULL) {
+        strftime(piTimestamp, sizeof(piTimestamp), "%Y-%m-%d %H:%M:%S", piTimeInfo);
+    } else {
+        snprintf(piTimestamp, sizeof(piTimestamp), "unknown");
+    }
+
     char escapedText[DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN * 2 + 3];
     DataTransmission_EscapeCsvField(text, escapedText, sizeof(escapedText));
-    fprintf(csvFile, "%s,%s\n", timestamp, escapedText);
+    fprintf(csvFile, "%s,%s,%s\n", timestamp, piTimestamp, escapedText);
     fflush(csvFile);
     fclose(csvFile);
 

@@ -31,6 +31,8 @@
 #include <signal.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <power_management/test_power_management.h>
 #include <gimbal_emu/test_payload_gimbal_emu.h>
 #include <fc_subscription/test_fc_subscription.h>
@@ -267,6 +269,16 @@ int main(int argc, char **argv)
             }
 
             {
+                // Create data_from_drone directory if it doesn't exist
+                const char *dataDir = "/home/rsp/drone_air_system/data_from_drone";
+                if (access(dataDir, F_OK) != 0) {
+                    if (mkdir(dataDir, 0755) != 0) {
+                        USER_LOG_ERROR("Failed to create data_from_drone directory for telemetry.");
+                    } else {
+                        USER_LOG_INFO("Created data_from_drone directory for telemetry.");
+                    }
+                }
+
                 T_DjiFcSubscriptionGpsDate gpsDate = 0;
                 T_DjiFcSubscriptionGpsTime gpsTime = 0;
                 T_DjiDataTimestamp timestamp = {0};
