@@ -43,6 +43,10 @@ extern "C" {
 T_DjiReturnCode DjiTest_DataTransmissionStartService(void);
 T_DjiReturnCode DjiTest_DataTransmissionStopService(void);
 
+/* Append a label to the real_time_labels CSV, on the same path used by the
+ * free-text TextInputBox flow. Safe to call from any thread. */
+T_DjiReturnCode DjiTest_DataTransmission_LogLabel(const char *text);
+
 #ifdef __cplusplus
 }
 #endif

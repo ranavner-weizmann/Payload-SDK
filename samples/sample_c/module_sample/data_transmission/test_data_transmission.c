@@ -498,6 +498,22 @@ static void DataTransmission_ProcessCsvQueue(void)
     }
 }
 
+T_DjiReturnCode DjiTest_DataTransmission_LogLabel(const char *text)
+{
+    if (text == NULL) {
+        return DJI_ERROR_SYSTEM_MODULE_CODE_INVALID_PARAMETER;
+    }
+    size_t len = strlen(text);
+    if (len == 0) {
+        return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+    }
+    if (len >= DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN) {
+        len = DATA_TRANSMISSION_CSV_ENTRY_MAX_LEN - 1;
+    }
+    DataTransmission_EnqueueCsvLine((const uint8_t *)text, (uint16_t)len);
+    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+}
+
 static void DataTransmission_EnqueueCsvLine(const uint8_t *data, uint16_t len)
 {
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();

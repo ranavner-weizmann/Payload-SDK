@@ -48,6 +48,7 @@
 #include "hms/hms_text_c/en/hms_text_config_json.h"
 #include "dji_hms.h"
 #include "positioning/test_positioning.h"
+#include "../data_transmission/test_data_transmission.h"
 
 /* Added for widget action CSV logging */
 #include <string.h>
@@ -148,22 +149,20 @@ static E_DjiMountPosition s_mountPosition = DJI_MOUNT_POSITION_PAYLOAD_PORT_NO1;
 static T_DjiAircraftInfoBaseInfo s_aircraftInfoBaseInfo = {0};
 static bool s_isAliasChanged = false;
 
+/* Custom button labels — order matches widget_index 0..3 in widget_config.json.
+ * Each press writes the label to the real_time_labels CSV. */
+static const char *s_buttonLabels[] = {
+    "N2",
+    "He",
+    "Start",
+    "Stop",
+};
+
 static const T_DjiWidgetHandlerListItem s_widgetHandlerList[] = {
-    {0,  DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {1,  DJI_WIDGET_TYPE_LIST,          DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {2,  DJI_WIDGET_TYPE_SWITCH,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {3,  DJI_WIDGET_TYPE_SCALE,         DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {4,  DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {5,  DJI_WIDGET_TYPE_SCALE,         DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {6,  DJI_WIDGET_TYPE_INT_INPUT_BOX, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {7,  DJI_WIDGET_TYPE_SWITCH,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {8,  DJI_WIDGET_TYPE_LIST,          DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {9,  DJI_WIDGET_TYPE_LIST,          DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {10, DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {11, DJI_WIDGET_TYPE_LIST,          DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {12, DJI_WIDGET_TYPE_LIST,          DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {13, DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {14, DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
+    {0, DJI_WIDGET_TYPE_BUTTON, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
+    {1, DJI_WIDGET_TYPE_BUTTON, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
+    {2, DJI_WIDGET_TYPE_BUTTON, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
+    {3, DJI_WIDGET_TYPE_BUTTON, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
 };
 
 static const char *s_widgetTypeNameArray[] = {
@@ -621,44 +620,11 @@ static T_DjiReturnCode DjiTestWidget_SetWidgetValue(E_DjiWidgetType widgetType, 
                   s_widgetTypeNameArray[widgetType], index, value);
     s_widgetValueList[index] = value;
 
-    if (widgetType == DJI_WIDGET_TYPE_SWITCH && index == 7) {
-        s_isallowRunFlightControlSample = value;
-    }
-
-    if (widgetType == DJI_WIDGET_TYPE_LIST && index == 8) {
-        s_mountPosition = value + 1;
-    }
-
-    if (widgetType == DJI_WIDGET_TYPE_LIST && index == 9) {
-        s_extensionPortSampleIndex = value;
-    }
-
-    if (widgetType == DJI_WIDGET_TYPE_BUTTON && index == 10) {
-        if (value == 1) {
-            s_isSampleStart = true;
-        }
-    }
-
-    if (widgetType == DJI_WIDGET_TYPE_LIST && index == 11) {
-        s_extensionPortErrcodeIndex = value;
-    }
-
-    if (widgetType == DJI_WIDGET_TYPE_LIST && index == 12) {
-        s_extensionPortErrLevelIndex = value;
-    }
-
-    if (widgetType == DJI_WIDGET_TYPE_BUTTON && index == 13) {
-        if (value == 1) {
-            s_isInjectErrcode = true;
-            s_isEliminateErrcode = false;
-        }
-    }
-
-    if (widgetType == DJI_WIDGET_TYPE_BUTTON && index == 14) {
-        if (value == 1) {
-            s_isInjectErrcode = false;
-            s_isEliminateErrcode = true;
-        }
+    /* On button press (value = 1), append the button name as a label to the
+     * real_time_labels CSV — same destination as the free-text TextInputBox. */
+    if (widgetType == DJI_WIDGET_TYPE_BUTTON && value == 1 &&
+        index < (sizeof(s_buttonLabels) / sizeof(s_buttonLabels[0]))) {
+        DjiTest_DataTransmission_LogLabel(s_buttonLabels[index]);
     }
 
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
