@@ -69,7 +69,7 @@
 #define DJI_LOG_FOLDER_NAME             "Logs"
 #define DJI_LOG_PATH_MAX_SIZE           (128)
 #define DJI_LOG_FOLDER_NAME_MAX_SIZE    (32)
-#define DJI_LOG_MAX_COUNT               (10)
+#define DJI_LOG_MAX_COUNT               (2)
 #define DJI_SYSTEM_CMD_STR_MAX_SIZE     (64)
 #define DJI_SYSTEM_RESULT_STR_MAX_SIZE  (128)
 
