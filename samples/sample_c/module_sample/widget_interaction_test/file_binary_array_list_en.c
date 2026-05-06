@@ -26,13 +26,10 @@
 /* Includes ------------------------------------------------------------------*/
 #include "file_binary_array_list_en.h"
 
-#include "widget_file_c/en_big_screen/icon_button1_png.h"
-#include "widget_file_c/en_big_screen/icon_button2_png.h"
-#include "widget_file_c/en_big_screen/icon_list_item1_png.h"
-#include "widget_file_c/en_big_screen/icon_list_item2_png.h"
-#include "widget_file_c/en_big_screen/icon_scale_png.h"
-#include "widget_file_c/en_big_screen/icon_switch_select_png.h"
-#include "widget_file_c/en_big_screen/icon_switch_unselect_png.h"
+#include "widget_file_c/en_big_screen/icon_n2_png.h"
+#include "widget_file_c/en_big_screen/icon_he_png.h"
+#include "widget_file_c/en_big_screen/icon_start_png.h"
+#include "widget_file_c/en_big_screen/icon_stop_png.h"
 #include "widget_file_c/en_big_screen/widget_config_json.h"
 
 /* Private constants ---------------------------------------------------------*/
@@ -42,13 +39,10 @@
 static T_DjiWidgetFileBinaryArray s_EnWidgetFileBinaryArrayList[] = {
     {widget_config_json_fileName, widget_config_json_fileSize, widget_config_json_fileBinaryArray},
 
-    {icon_button1_png_fileName, icon_button1_png_fileSize, icon_button1_png_fileBinaryArray},
-    {icon_button2_png_fileName, icon_button2_png_fileSize, icon_button2_png_fileBinaryArray},
-    {icon_list_item1_png_fileName, icon_list_item1_png_fileSize, icon_list_item1_png_fileBinaryArray},
-    {icon_list_item2_png_fileName, icon_list_item2_png_fileSize, icon_list_item2_png_fileBinaryArray},
-    {icon_scale_png_fileName, icon_scale_png_fileSize, icon_scale_png_fileBinaryArray},
-    {icon_switch_select_png_fileName, icon_switch_select_png_fileSize, icon_switch_select_png_fileBinaryArray},
-    {icon_switch_unselect_png_fileName, icon_switch_unselect_png_fileSize, icon_switch_unselect_png_fileBinaryArray}
+    {icon_n2_png_fileName,    icon_n2_png_fileSize,    icon_n2_png_fileBinaryArray},
+    {icon_he_png_fileName,    icon_he_png_fileSize,    icon_he_png_fileBinaryArray},
+    {icon_start_png_fileName, icon_start_png_fileSize, icon_start_png_fileBinaryArray},
+    {icon_stop_png_fileName,  icon_stop_png_fileSize,  icon_stop_png_fileBinaryArray}
 };
 
 /* Export values -------------------------------------------------------------*/
