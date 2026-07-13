@@ -57,7 +57,14 @@ static T_DjiReturnCode DjiTest_FcSubscriptionReceiveQuaternionCallback(const uin
 static void WriteCsvRow(FILE *fp,
                         const char *timestamp,
                         double lat, double lon, double alt,
-                        double pitch, double roll, double yaw);
+                        double pitch, double roll, double yaw,
+                        int16_t compassX, int16_t compassY, int16_t compassZ,
+                        double altitudeAglM,
+                        double velX, double velY, double velZ,
+                        double accelRawX, double accelRawY, double accelRawZ,
+                        double gyroRawX, double gyroRawY, double gyroRawZ,
+                        const int16_t escSpeed[8],
+                        double baroAltitudeM);
 static bool ConvertGpsDateTimeToLocalTimeString(uint32_t gpsDate, uint32_t gpsTime,
                                                 const char *format, char *buffer,
                                                 size_t bufferSize);
@@ -219,6 +226,83 @@ T_DjiReturnCode DjiTest_FcSubscriptionStartService(void)
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     } else {
         USER_LOG_DEBUG("Subscribe topic gps time success.");
+    }
+
+    /* Compass (magnetometer) at 1 Hz — polled in task */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_COMPASS,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic compass error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic compass success.");
+    }
+
+    /* Fused altitude (ASL) at 1 Hz — combined with home point altitude to get AGL */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_FUSED,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic altitude fused error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic altitude fused success.");
+    }
+
+    /* ASL altitude recorded at last takeoff at 1 Hz — used to derive AGL */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_OF_HOMEPOINT,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic altitude of homepoint error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic altitude of homepoint success.");
+    }
+
+    /* Barometric altitude at 1 Hz — polled in task */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_BAROMETER,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic altitude barometer error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic altitude barometer success.");
+    }
+
+    /* Raw IMU accelerometer at 1 Hz — polled in task */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_ACCELERATION_RAW,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic acceleration raw error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic acceleration raw success.");
+    }
+
+    /* Raw IMU gyroscope at 1 Hz — polled in task */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_ANGULAR_RATE_RAW,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic angular rate raw error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic angular rate raw success.");
+    }
+
+    /* ESC/motor telemetry at 1 Hz — polled in task */
+    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_ESC_DATA,
+                                               DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ,
+                                               NULL);
+    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic esc data error.");
+        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    } else {
+        USER_LOG_DEBUG("Subscribe topic esc data success.");
     }
 
     if (osalHandler->TaskCreate("user_subscription_task", UserFcSubscription_Task,
@@ -421,11 +505,33 @@ static bool CsvNeedsHeader(const char *path)
 static void WriteCsvRow(FILE *fp,
                         const char *timestamp,
                         double lat, double lon, double alt,
-                        double pitch, double roll, double yaw)
+                        double pitch, double roll, double yaw,
+                        int16_t compassX, int16_t compassY, int16_t compassZ,
+                        double altitudeAglM,
+                        double velX, double velY, double velZ,
+                        double accelRawX, double accelRawY, double accelRawZ,
+                        double gyroRawX, double gyroRawY, double gyroRawZ,
+                        const int16_t escSpeed[8],
+                        double baroAltitudeM)
 {
-    fprintf(fp, "%s,%.7f,%.7f,%.2f,%.2f,%.2f,%.2f\n",
+    fprintf(fp, "%s,%.7f,%.7f,%.2f,%.2f,%.2f,%.2f,"
+                "%d,%d,%d,"
+                "%.2f,"
+                "%.3f,%.3f,%.3f,"
+                "%.3f,%.3f,%.3f,"
+                "%.4f,%.4f,%.4f,"
+                "%d,%d,%d,%d,%d,%d,%d,%d,"
+                "%.2f\n",
             timestamp,
-            lat, lon, alt, pitch, roll, yaw);
+            lat, lon, alt, pitch, roll, yaw,
+            compassX, compassY, compassZ,
+            altitudeAglM,
+            velX, velY, velZ,
+            accelRawX, accelRawY, accelRawZ,
+            gyroRawX, gyroRawY, gyroRawZ,
+            escSpeed[0], escSpeed[1], escSpeed[2], escSpeed[3],
+            escSpeed[4], escSpeed[5], escSpeed[6], escSpeed[7],
+            baroAltitudeM);
     fflush(fp);
 }
 
@@ -445,7 +551,14 @@ static void WriteCsvRow(FILE *fp,
  *
  * CSV columns:
  *   fc_timestamp, latitude_deg, longitude_deg, altitude_m,
- *   pitch_deg, roll_deg, yaw_deg
+ *   pitch_deg, roll_deg, yaw_deg,
+ *   compass_x, compass_y, compass_z,
+ *   altitude_agl_m,
+ *   vel_x_ms, vel_y_ms, vel_z_ms,
+ *   accel_raw_x_ms2, accel_raw_y_ms2, accel_raw_z_ms2,
+ *   gyro_raw_x_rads, gyro_raw_y_rads, gyro_raw_z_rads,
+ *   esc1_rpm..esc8_rpm,
+ *   baro_altitude_m
  *
  * fc_timestamp is formatted as <millisecond>.<microsecond> from the FC clock,
  * sourced from the GPS position topic poll.
@@ -456,6 +569,13 @@ static void *UserFcSubscription_Task(void *arg)
     T_DjiFcSubscriptionVelocity  velocity    = {0};
     T_DjiFcSubscriptionGpsPosition gpsPosition = {0};
     T_DjiFcSubscriptionGpsDetails gpsDetails  = {0};
+    T_DjiFcSubscriptionCompass   compass     = {0};
+    T_DjiFcSubscriptionAltitudeFused        altitudeFused        = 0;
+    T_DjiFcSubscriptionAltitudeOfHomePoint  altitudeOfHomePoint  = 0;
+    T_DjiFcSubscriptionAltitudeBarometer    altitudeBarometer    = 0;
+    T_DjiFcSubscriptionAccelerationRaw      accelerationRaw      = {0};
+    T_DjiFcSubscriptionAngularRateRaw       angularRateRaw       = {0};
+    T_DjiFcSubscriptionEscData              escData              = {0};
     T_DjiDataTimestamp           timestamp   = {0};
     T_DjiOsalHandler            *osalHandler = DjiPlatform_GetOsalHandler();
 
@@ -510,6 +630,67 @@ static void *UserFcSubscription_Task(void *arg)
             s_totalSatelliteNumberUsed = gpsDetails.totalSatelliteNumberUsed;
         }
 
+        /* ---- Poll compass (magnetometer) ---- */
+        djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_COMPASS,
+                                                          (uint8_t *) &compass,
+                                                          sizeof(T_DjiFcSubscriptionCompass),
+                                                          &timestamp);
+        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("get value of topic compass error.");
+        }
+
+        /* ---- Poll fused altitude (ASL) and home point altitude (ASL at takeoff) ---- */
+        djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_FUSED,
+                                                          (uint8_t *) &altitudeFused,
+                                                          sizeof(T_DjiFcSubscriptionAltitudeFused),
+                                                          &timestamp);
+        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("get value of topic altitude fused error.");
+        }
+
+        djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_OF_HOMEPOINT,
+                                                          (uint8_t *) &altitudeOfHomePoint,
+                                                          sizeof(T_DjiFcSubscriptionAltitudeOfHomePoint),
+                                                          &timestamp);
+        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("get value of topic altitude of homepoint error.");
+        }
+
+        /* ---- Poll barometric altitude ---- */
+        djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_BAROMETER,
+                                                          (uint8_t *) &altitudeBarometer,
+                                                          sizeof(T_DjiFcSubscriptionAltitudeBarometer),
+                                                          &timestamp);
+        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("get value of topic altitude barometer error.");
+        }
+
+        /* ---- Poll raw IMU accelerometer and gyroscope ---- */
+        djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_ACCELERATION_RAW,
+                                                          (uint8_t *) &accelerationRaw,
+                                                          sizeof(T_DjiFcSubscriptionAccelerationRaw),
+                                                          &timestamp);
+        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("get value of topic acceleration raw error.");
+        }
+
+        djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_ANGULAR_RATE_RAW,
+                                                          (uint8_t *) &angularRateRaw,
+                                                          sizeof(T_DjiFcSubscriptionAngularRateRaw),
+                                                          &timestamp);
+        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("get value of topic angular rate raw error.");
+        }
+
+        /* ---- Poll ESC/motor telemetry ---- */
+        djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_ESC_DATA,
+                                                          (uint8_t *) &escData,
+                                                          sizeof(T_DjiFcSubscriptionEscData),
+                                                          &timestamp);
+        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+            USER_LOG_ERROR("get value of topic esc data error.");
+        }
+
         /* ---- Write telemetry CSV row ---- */
         if (s_isCsvOutputPathConfigured) {
 
@@ -555,15 +736,39 @@ static void *UserFcSubscription_Task(void *arg)
             }
 
             /* Open in append mode — creates the file if it doesn't exist */
+            /* AGL altitude above the takeoff (home) point: fused ASL altitude
+             * minus the ASL altitude recorded when the aircraft last took off. */
+            double altitudeAgl = (double) altitudeFused - (double) altitudeOfHomePoint;
+
+            int16_t escSpeed[8];
+            for (int escIdx = 0; escIdx < 8; ++escIdx) {
+                escSpeed[escIdx] = escData.esc[escIdx].speed;
+            }
+
             bool   writeHeader = CsvNeedsHeader(s_csvOutputPath);
             FILE  *fp          = fopen(s_csvOutputPath, "a");
             if (fp != NULL) {
                 if (writeHeader) {
                     fprintf(fp, "timestamp,latitude_deg,longitude_deg,"
-                                "altitude_m,pitch_deg,roll_deg,yaw_deg\n");
+                                "altitude_m,pitch_deg,roll_deg,yaw_deg,"
+                                "compass_x,compass_y,compass_z,"
+                                "altitude_agl_m,"
+                                "vel_x_ms,vel_y_ms,vel_z_ms,"
+                                "accel_raw_x_ms2,accel_raw_y_ms2,accel_raw_z_ms2,"
+                                "gyro_raw_x_rads,gyro_raw_y_rads,gyro_raw_z_rads,"
+                                "esc1_rpm,esc2_rpm,esc3_rpm,esc4_rpm,"
+                                "esc5_rpm,esc6_rpm,esc7_rpm,esc8_rpm,"
+                                "baro_altitude_m\n");
                 }
 
-                WriteCsvRow(fp, gpsTimestamp, lat, lon, alt, pitch, roll, yaw);
+                WriteCsvRow(fp, gpsTimestamp, lat, lon, alt, pitch, roll, yaw,
+                           compass.x, compass.y, compass.z,
+                           altitudeAgl,
+                           (double) velocity.data.x, (double) velocity.data.y, (double) velocity.data.z,
+                           (double) accelerationRaw.x, (double) accelerationRaw.y, (double) accelerationRaw.z,
+                           (double) angularRateRaw.x, (double) angularRateRaw.y, (double) angularRateRaw.z,
+                           escSpeed,
+                           (double) altitudeBarometer);
                 fclose(fp);
             } else {
                 USER_LOG_ERROR("Cannot open telemetry CSV: %s", s_csvOutputPath);

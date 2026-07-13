@@ -52,7 +52,13 @@ T_DjiReturnCode DjiTest_FcSubscriptionGetTotalSatelliteNumber(uint8_t *number);
  * The CSV will be created (or appended to) at this path and written at 1 Hz.
  *
  * Format:
- *   timestamp,latitude_deg,longitude_deg,altitude_m,pitch_deg,roll_deg,yaw_deg
+ *   timestamp,latitude_deg,longitude_deg,altitude_m,pitch_deg,roll_deg,yaw_deg,
+ *   compass_x,compass_y,compass_z,altitude_agl_m,
+ *   vel_x_ms,vel_y_ms,vel_z_ms,
+ *   accel_raw_x_ms2,accel_raw_y_ms2,accel_raw_z_ms2,
+ *   gyro_raw_x_rads,gyro_raw_y_rads,gyro_raw_z_rads,
+ *   esc1_rpm,esc2_rpm,esc3_rpm,esc4_rpm,esc5_rpm,esc6_rpm,esc7_rpm,esc8_rpm,
+ *   baro_altitude_m
  *
  * @param path  Absolute path on the Raspberry Pi filesystem,
  *              e.g. "/home/rsp/drone_air_system/data_from_drone/telemetry.csv"
