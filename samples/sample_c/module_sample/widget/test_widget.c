@@ -41,7 +41,7 @@
 #define WIDGET_LOG_STRING_MAX_SIZE      (64)
 #define WIDGET_LOG_LINE_MAX_NUM         (4)
 
-#define VITALS_NUM_FIELDS               (11)
+#define VITALS_NUM_FIELDS               (13)
 
 /* Private types -------------------------------------------------------------*/
 typedef struct {
@@ -102,19 +102,18 @@ static T_VitalsField s_vitalsFields[VITALS_NUM_FIELDS] = {
     /* csvHeader   label    unit   fmt     colIndex  value */
     { "T",         "T",     " C",   "%.1f", -1,       NAN   },  /* imet    → temp              */
     { "O3",        "O3",    " ppb", "%.1f", -1,       NAN   },  /* pom     → Ozone_ppb         */
+    { "WS",        "WS",    " m/s", "%.1f", -1,       NAN   },  /* trisonica → Wind_Speed      */
     { "I",         "I",     "",    "%.0f", -1,       NAN   },  /* spectro → 455.1949          */
     { "MC",        "MC",    " ug/m3", "%.2f", -1,       NAN   },  /* partector2pro               */
     { "MA",        "MA",    "",    "%.3f", -1,       NAN   },  /* miniaeth → blue_BCc         */
-    { "TECA",      "TECA",  " A",   "%.2f", -1,       NAN   },  /* cavity  → TEC_ActualOutputCurrent */
-    { "TECT",      "TECT",  " C",   "%.1f", -1,       NAN   },  /* cavity  → TEC_ObjectTemperature   */
+    { "TECA",      "TECA",  " A",   "%.2f", -1,       NAN   },  /* cavity/ldd → TEC_ActualOutputCurrent */
+    { "TECT",      "TECT",  " C",   "%.1f", -1,       NAN   },  /* cavity/ldd → TEC_ObjectTemperature   */
     { "Ti",        "Ti",    " C",   "%.1f", -1,       NAN   },  /* cavity  → temp_c            */
     { "RHi",       "RHi",   " %",   "%.1f", -1,       NAN   },  /* cavity  → humidity_pct      */
     { "Pi",        "Pi",    " mb",  "%.1f", -1,       NAN   },  /* cavity  → pressure_mb       */
     { "RPM",       "RPM",   "",    "%.0f", -1,       NAN   },  /* cavity  → pump_rpm          */
+    { "POPS_C",    "POPS_C"," /cm3", "%.1f", -1,       NAN   },  /* pops    → PartCon           */
 };
-
-/* Set to true once the header row has been successfully parsed */
-static bool s_vitalsHeadersResolved = false;
 
 static const T_DjiWidgetHandlerListItem s_widgetHandlerList[] = {
     {0, DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
@@ -272,10 +271,6 @@ T_DjiReturnCode DjiTest_WidgetSetCsvFilePath(const char *path)
     memcpy(s_csvFilePath, path, USER_UTIL_MIN(strlen(path), sizeof(s_csvFilePath) - 1));
     s_isCsvFilePathConfigured = true;
 
-    /* Force header re-resolution next time the task reads the file,
-     * in case the new CSV has a different column layout. */
-    s_vitalsHeadersResolved = false;
-
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
@@ -287,7 +282,7 @@ T_DjiReturnCode DjiTest_WidgetSetCsvFilePath(const char *path)
  * csvHeader string was found. Fields whose csvHeader is not present in
  * the header row keep colIndex = -1, and their value will remain NAN.
  *
- * Called once per CSV file open (guarded by s_vitalsHeadersResolved).
+ * Called once per widget-task tick, on the header row of the CSV.
  * ------------------------------------------------------------------------- */
 static void ResolveVitalsHeaders(const char *headerLine)
 {
@@ -411,12 +406,14 @@ static bool ParseVitalsDataLine(const char *line, char *tsBuf, size_t tsBufSize)
 /*
  * DjiTest_WidgetTask
  *
- * Runs at 1 Hz. Opens vitals.csv on every tick, resolves headers on the
- * first read (or whenever the CSV path changes), then parses the last data
- * row and displays all fields in the DJI Pilot 2 floating window.
+ * Runs at 1 Hz. Opens vitals.csv on every tick, re-resolves headers against
+ * that tick's header row, then parses the last data row and displays the
+ * fields in the DJI Pilot 2 floating window.
  *
- * Fields that are absent from the CSV header or whose value is empty are
- * shown as "---" rather than a misleading zero.
+ * Fields whose csvHeader is absent from the CSV (i.e. the owning sensor is
+ * disabled in sensor_config.json) are omitted entirely. Fields that are
+ * present but have an empty/unparsed value are shown as "---" rather than
+ * a misleading zero.
  */
 void *DjiTest_WidgetTask(void *arg)
 {
@@ -429,7 +426,7 @@ void *DjiTest_WidgetTask(void *arg)
     while (1) {
 
         /* ----------------------------------------------------------------
-         * Step 1 — Read vitals.csv: resolve headers (once) then parse the
+         * Step 1 — Read vitals.csv: resolve headers, then parse the
          *           last data line.
          * ---------------------------------------------------------------- */
         char ts[64] = "N/A";
@@ -446,24 +443,17 @@ void *DjiTest_WidgetTask(void *arg)
                         /* Data row */
                         strncpy(lastDataLine, buf, sizeof(lastDataLine) - 1);
                         lastDataLine[sizeof(lastDataLine) - 1] = '\0';
-                    } else if (!s_vitalsHeadersResolved && buf[0] != '\0') {
+                    } else if (buf[0] != '\0') {
                         /*
-                         * First non-data row encountered before headers are
-                         * resolved → treat it as the header row.
-                         * This handles CSV files where the header is the
-                         * first line (the common case).
+                         * Non-data row → treat it as the header row and
+                         * re-resolve every tick (not just once). This is
+                         * what lets the RC display track sensor_config.json:
+                         * when a sensor is toggled and vitals.py restarts,
+                         * its column appears/disappears from the header, and
+                         * this task picks that up within ~1s without needing
+                         * the PSDK app itself to be restarted.
                          */
                         ResolveVitalsHeaders(buf);
-                        s_vitalsHeadersResolved = true;
-
-                        /* Log any fields that could not be matched */
-                        int i;
-                        for (i = 0; i < VITALS_NUM_FIELDS; i++) {
-                            if (s_vitalsFields[i].colIndex == -1) {
-                                USER_LOG_WARN("Vitals header not found in CSV: \"%s\"",
-                                              s_vitalsFields[i].csvHeader);
-                            }
-                        }
                     }
                 }
                 fclose(fp);
@@ -513,8 +503,14 @@ void *DjiTest_WidgetTask(void *arg)
 
                 T_VitalsField *fld = &s_vitalsFields[i];
 
+                if (fld->colIndex == -1) {
+                    /* Header not present in CSV → sensor disabled in
+                     * sensor_config.json. Omit the line entirely. */
+                    continue;
+                }
+
                 if (isnan(fld->value)) {
-                    /* Missing / empty field → display "---" */
+                    /* Enabled sensor, but no reading yet → display "---" */
                     offset += snprintf(message + offset, remaining,
                                        "%s:---\r\n", fld->label);
                 } else {
