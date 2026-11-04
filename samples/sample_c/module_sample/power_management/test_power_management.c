@@ -117,19 +117,14 @@ T_DjiReturnCode DjiTest_PowerManagementStartService(void)
 
         if (baseInfo.djiAdapterType == DJI_SDK_ADAPTER_TYPE_SKYPORT_V3 ||
             baseInfo.djiAdapterType == DJI_SDK_ADAPTER_TYPE_EPORT_V2_RIBBON_CABLE) {
-            E_DjiHighPowerVoltage voltage = E_DJI_HIGH_POWER_VOLTAGE_17V;
-
-            USER_LOG_INFO("Start to apply high power.");
-
-            returnCode = DjiPowerManagement_ApplyHighPowerSyncV2(voltage);
-            if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-                USER_LOG_ERROR("apply high power error");
-                return returnCode;
-            }
-            USER_LOG_INFO("Success to apply high power %s.",
-                voltage == E_DJI_HIGH_POWER_VOLTAGE_13V6 ? "13V6" :
-                voltage == E_DJI_HIGH_POWER_VOLTAGE_17V ? "17V" :
-                voltage == E_DJI_HIGH_POWER_VOLTAGE_24V ? "24V" : "???");
+            /*
+             * Intentionally NOT requesting 17V/24V on E-Port V2 / SkyPort V3.
+             * On M400 the high-voltage output also requires HIGH_PWR_REQ (pin 36) hard-wired
+             * to GND. Without it the SDK reports success but the port stays at ~13.6V, and the
+             * aircraft raises "Gimbal 1 payload voltage too low". Our payload only uses the
+             * dev board's regulated 5V/12V outputs, which work fine at the default 13.6V.
+             */
+            USER_LOG_INFO("Skipping high power request; using default 13.6V.");
         } else {
             USER_LOG_INFO("Start to apply high power.");
 
