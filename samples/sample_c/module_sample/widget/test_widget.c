@@ -41,7 +41,7 @@
 #define WIDGET_LOG_STRING_MAX_SIZE      (64)
 #define WIDGET_LOG_LINE_MAX_NUM         (4)
 
-#define VITALS_NUM_FIELDS               (13)
+#define VITALS_NUM_FIELDS               (14)
 
 /* Private types -------------------------------------------------------------*/
 typedef struct {
@@ -100,7 +100,8 @@ static T_DjiTestWidgetLog s_djiTestWidgetLog[WIDGET_LOG_LINE_MAX_NUM] = {0};
  * ========================================================================= */
 static T_VitalsField s_vitalsFields[VITALS_NUM_FIELDS] = {
     /* csvHeader   label    unit   fmt     colIndex  value */
-    { "T",         "T",     " C",   "%.1f", -1,       NAN   },  /* imet    → temp              */
+    { "T",         "T",     " C",   "%.1f", -1,       NAN   },  /* imet    → temp_C (already C) */
+    { "RH",        "RH",    " %",   "%.1f", -1,       NAN   },  /* imet    → rel_hum           */
     { "O3",        "O3",    " ppb", "%.1f", -1,       NAN   },  /* pom     → Ozone_ppb         */
     { "WS",        "WS",    " m/s", "%.1f", -1,       NAN   },  /* trisonica → Wind_Speed      */
     { "I",         "I",     "",    "%.0f", -1,       NAN   },  /* spectro → 455.1949          */
@@ -459,11 +460,10 @@ void *DjiTest_WidgetTask(void *arg)
                 fclose(fp);
 
                 if (lastDataLine[0] != '\0') {
+                    /* vitals.py exports iMet's temp_C, already in degrees C,
+                     * so no scaling here (it used to export the raw field in
+                     * hundredths, and dividing by 100 now showed ~0.3 C). */
                     parsed = ParseVitalsDataLine(lastDataLine, ts, sizeof(ts));
-                    /* Temperature is stored *100 in the CSV — correct it here */
-                    if (parsed && !isnan(s_vitalsFields[0].value)) {
-                        s_vitalsFields[0].value /= 100.0f;
-                    }
                 }
             } else {
                 USER_LOG_WARN("Cannot open CSV: %s", s_csvFilePath);
