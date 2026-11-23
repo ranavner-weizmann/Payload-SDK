@@ -30,6 +30,7 @@
 #include "widget_file_c/en_big_screen/icon_he_png.h"
 #include "widget_file_c/en_big_screen/icon_start_png.h"
 #include "widget_file_c/en_big_screen/icon_stop_png.h"
+#include "widget_file_c/en_big_screen/icon_end_flight_png.h"
 #include "widget_file_c/en_big_screen/widget_config_json.h"
 
 /* Private constants ---------------------------------------------------------*/
@@ -42,7 +43,8 @@ static T_DjiWidgetFileBinaryArray s_EnWidgetFileBinaryArrayList[] = {
     {icon_n2_png_fileName,    icon_n2_png_fileSize,    icon_n2_png_fileBinaryArray},
     {icon_he_png_fileName,    icon_he_png_fileSize,    icon_he_png_fileBinaryArray},
     {icon_start_png_fileName, icon_start_png_fileSize, icon_start_png_fileBinaryArray},
-    {icon_stop_png_fileName,  icon_stop_png_fileSize,  icon_stop_png_fileBinaryArray}
+    {icon_stop_png_fileName,  icon_stop_png_fileSize,  icon_stop_png_fileBinaryArray},
+    {icon_end_flight_png_fileName, icon_end_flight_png_fileSize, icon_end_flight_png_fileBinaryArray}
 };
 
 /* Export values -------------------------------------------------------------*/
