@@ -49,6 +49,7 @@
 #include "dji_hms.h"
 #include "positioning/test_positioning.h"
 #include "../data_transmission/test_data_transmission.h"
+#include "end_flight.h"
 
 /* Added for widget action CSV logging */
 #include <string.h>
@@ -149,13 +150,15 @@ static E_DjiMountPosition s_mountPosition = DJI_MOUNT_POSITION_PAYLOAD_PORT_NO1;
 static T_DjiAircraftInfoBaseInfo s_aircraftInfoBaseInfo = {0};
 static bool s_isAliasChanged = false;
 
-/* Custom button labels — order matches widget_index 0..3 in widget_config.json.
- * Each press writes the label to the real_time_labels CSV. */
+/* Custom button labels — order matches widget_index 0..4 in widget_config.json.
+ * Each press writes the label to the real_time_labels CSV. Index 4 is END,
+ * which also starts the end of flight (see end_flight.c). */
 static const char *s_buttonLabels[] = {
     "N2",
     "He",
     "Start",
     "Stop",
+    "End flight",
 };
 
 static const T_DjiWidgetHandlerListItem s_widgetHandlerList[] = {
@@ -163,6 +166,7 @@ static const T_DjiWidgetHandlerListItem s_widgetHandlerList[] = {
     {1, DJI_WIDGET_TYPE_BUTTON, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
     {2, DJI_WIDGET_TYPE_BUTTON, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
     {3, DJI_WIDGET_TYPE_BUTTON, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
+    {END_FLIGHT_WIDGET_INDEX, DJI_WIDGET_TYPE_BUTTON, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
 };
 
 static const char *s_widgetTypeNameArray[] = {
@@ -625,6 +629,10 @@ static T_DjiReturnCode DjiTestWidget_SetWidgetValue(E_DjiWidgetType widgetType, 
     if (widgetType == DJI_WIDGET_TYPE_BUTTON && value == 1 &&
         index < (sizeof(s_buttonLabels) / sizeof(s_buttonLabels[0]))) {
         DjiTest_DataTransmission_LogLabel(s_buttonLabels[index]);
+    }
+
+    if (widgetType == DJI_WIDGET_TYPE_BUTTON && value == 1 && index == END_FLIGHT_WIDGET_INDEX) {
+        EndFlight_OnButtonPress();
     }
 
     return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;

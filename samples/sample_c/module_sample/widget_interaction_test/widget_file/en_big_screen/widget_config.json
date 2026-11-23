@@ -63,6 +63,15 @@
           "is_enable": true,
           "mapping_config_display_order": 3
         }
+      },
+      {
+        "widget_index": 4,
+        "widget_type": "button",
+        "widget_name": "End flight",
+        "icon_file_set": {
+          "icon_file_name_selected": "icon_end_flight.png",
+          "icon_file_name_unselected": "icon_end_flight.png"
+        }
       }
     ]
   },

@@ -34,6 +34,7 @@
 #include <stdarg.h>
 #include "dji_sdk_config.h"
 #include "file_binary_array_list_en.h"
+#include "../widget_interaction_test/end_flight.h"
 
 /* Private constants ---------------------------------------------------------*/
 #define WIDGET_DIR_PATH_LEN_MAX         (256)
@@ -425,6 +426,17 @@ void *DjiTest_WidgetTask(void *arg)
     USER_UTIL_UNUSED(arg);
 
     while (1) {
+
+        /* During the end of flight (END on the remote, or the dashboard's
+         * End of flight), the box shows its progress instead of the vitals. */
+        if (EndFlight_GetMessage(message, sizeof(message))) {
+            djiStat = DjiWidgetFloatingWindow_ShowMessage(message);
+            if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                USER_LOG_ERROR("Floating window show message error, stat = 0x%08llX", djiStat);
+            }
+            osalHandler->TaskSleepMs(1000);
+            continue;
+        }
 
         /* ----------------------------------------------------------------
          * Step 1 — Read vitals.csv: resolve headers, then parse the
