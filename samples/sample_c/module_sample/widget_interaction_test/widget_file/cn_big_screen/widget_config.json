@@ -8,8 +8,8 @@
       "is_enable": true
     },
     "speaker": {
-      "is_enable_tts": true,
-      "is_enable_voice": true
+      "is_enable_tts": false,
+      "is_enable_voice": false
     },
     "widget_list": [
       {
