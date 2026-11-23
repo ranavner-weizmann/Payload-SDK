@@ -18,6 +18,14 @@
  * died mid-job must not cover the vitals for good. */
 #define END_FLIGHT_RUNNING_MAX_AGE_S  (15 * 60)
 #define END_FLIGHT_DONE_MAX_AGE_S     (10 * 60)
+/* A NOTE (no USB drive, nothing stopped) shows this long, then the vitals. */
+#define END_FLIGHT_NOTE_MAX_AGE_S     (30)
+/* Status file kinds. */
+#define KIND_NONE     0
+#define KIND_RUNNING  1
+#define KIND_DONE     2
+#define KIND_WAITING  3   /* waiting for a USB drive: END x2 finishes without backup */
+#define KIND_NOTE     4
 /* After the second press, "Starting" shows until the dashboard answers. */
 #define END_FLIGHT_STARTING_MS        (8000)
 /* How long a refused press explains itself in the box. */
@@ -32,6 +40,10 @@ static time_t s_appStart = 0;         /* a DONE written before this app started 
 static uint64_t s_refusedAtMs = 0;    /* a press refused because of the flight status */
 static const char *s_refusedText = "";
 static volatile bool s_flightSubscribed = false;
+static bool s_armedForSkip = false;   /* armed while it waits for a drive */
+static bool s_startedSkip = false;    /* the second press asked to skip the backup */
+static bool s_driveQueryPending = false;
+static char s_driveText[64] = "";     /* "OK (57.1 GB free)", "NO USB DRIVE", ... */
 static uint64_t s_subscribeTriedMs = 0;
 
 static uint64_t NowMs(void)
@@ -87,8 +99,8 @@ static void EnsureAppStart(void)
     }
 }
 
-/* Reads the status file. Returns 1 for RUNNING, 2 for DONE, 0 for nothing
- * to show; body gets the text after the first line. */
+/* Reads the status file. Returns a KIND_*; body gets the text after the
+ * first line. */
 static int ReadStatus(char *body, size_t bodyLen)
 {
     struct stat st;
@@ -116,13 +128,17 @@ static int ReadStatus(char *body, size_t bodyLen)
     }
     *nl = '\0';
     if (strcmp(buf, "RUNNING") == 0) {
-        kind = (now - st.st_mtime <= END_FLIGHT_RUNNING_MAX_AGE_S) ? 1 : 0;
+        kind = (now - st.st_mtime <= END_FLIGHT_RUNNING_MAX_AGE_S) ? KIND_RUNNING : KIND_NONE;
+    } else if (strcmp(buf, "WAITING") == 0) {
+        kind = (now - st.st_mtime <= END_FLIGHT_RUNNING_MAX_AGE_S) ? KIND_WAITING : KIND_NONE;
     } else if (strcmp(buf, "DONE") == 0) {
-        kind = (st.st_mtime >= s_appStart && now - st.st_mtime <= END_FLIGHT_DONE_MAX_AGE_S) ? 2 : 0;
+        kind = (st.st_mtime >= s_appStart && now - st.st_mtime <= END_FLIGHT_DONE_MAX_AGE_S) ? KIND_DONE : KIND_NONE;
+    } else if (strcmp(buf, "NOTE") == 0) {
+        kind = (st.st_mtime >= s_appStart && now - st.st_mtime <= END_FLIGHT_NOTE_MAX_AGE_S) ? KIND_NOTE : KIND_NONE;
     } else {
-        kind = 0;
+        kind = KIND_NONE;
     }
-    if (kind != 0) {
+    if (kind != KIND_NONE) {
         snprintf(body, bodyLen, "%s", nl + 1);
     }
     return kind;
@@ -157,14 +173,43 @@ static void CopyCrLf(char *out, size_t outLen, const char *text)
     out[o] = '\0';
 }
 
-static void StartEndOfFlight(void)
+static void StartEndOfFlight(bool skipBackup)
 {
     /* Runs in the background, so the widget callback returns at once. The
      * dashboard does the work; its answer only goes to the log file. */
-    int rc = system("curl -s -m 30 -X POST -H 'Content-Type: application/json' "
-                    "-d '{\"from\":\"rc\"}' " END_FLIGHT_URL
-                    " > /tmp/mamp_end_flight_post.txt 2>&1 &");
-    USER_LOG_INFO("End of flight requested from the remote (curl start: %d)", rc);
+    int rc = system(skipBackup
+                    ? "curl -s -m 30 -X POST -H 'Content-Type: application/json' "
+                      "-d '{\"from\":\"rc\",\"skip_backup\":true}' " END_FLIGHT_URL
+                      " > /tmp/mamp_end_flight_post.txt 2>&1 &"
+                    : "curl -s -m 30 -X POST -H 'Content-Type: application/json' "
+                      "-d '{\"from\":\"rc\"}' " END_FLIGHT_URL
+                      " > /tmp/mamp_end_flight_post.txt 2>&1 &");
+    USER_LOG_INFO("End of flight %s from the remote (curl start: %d)",
+                  skipBackup ? "without backup" : "requested", rc);
+}
+
+/* Asks the dashboard whether it sees a USB drive, for the first press's
+ * message. Called from the data box task, never the button callback. */
+static void QueryDrive(void)
+{
+    char line[64] = "";
+    FILE *fp = popen("curl -s -m 5 '" END_FLIGHT_DRIVE_URL "' 2>/dev/null", "r");
+    size_t len;
+
+    if (fp != NULL) {
+        if (fgets(line, sizeof(line), fp) == NULL) {
+            line[0] = '\0';
+        }
+        pclose(fp);
+    }
+    len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[--len] = '\0';
+    }
+    pthread_mutex_lock(&s_mutex);
+    snprintf(s_driveText, sizeof(s_driveText), "%s", len > 0 ? line : "can't check");
+    s_driveQueryPending = false;
+    pthread_mutex_unlock(&s_mutex);
 }
 
 void EndFlight_OnButtonPress(void)
@@ -172,7 +217,9 @@ void EndFlight_OnButtonPress(void)
     char body[512];
     uint64_t now = NowMs();
     bool start = false;
+    bool skip = false;
     int flight;
+    int kind = KIND_NONE;
 
     pthread_mutex_lock(&s_mutex);
     EnsureAppStart();
@@ -186,21 +233,30 @@ void EndFlight_OnButtonPress(void)
                         ? "END OF FLIGHT\nCan't tell if the drone\nhas landed.\nUse the dashboard.\n"
                         : "END OF FLIGHT\nOff while flying.\nLand first.\n";
         USER_LOG_WARN("End of flight refused: flight status %d", flight);
-    } else if (ReadStatus(body, sizeof(body)) == 1 ||
-        (s_startedAtMs != 0 && now - s_startedAtMs < END_FLIGHT_STARTING_MS)) {
+    } else if ((kind = ReadStatus(body, sizeof(body))) == KIND_RUNNING ||
+               (s_startedAtMs != 0 && now - s_startedAtMs < END_FLIGHT_STARTING_MS)) {
         /* Already running: nothing to do. */
-    } else if (s_armedAtMs != 0 && now - s_armedAtMs <= END_FLIGHT_CONFIRM_MS) {
+    } else if (s_armedAtMs != 0 && now - s_armedAtMs <= END_FLIGHT_CONFIRM_MS &&
+               s_armedForSkip == (kind == KIND_WAITING)) {
         s_armedAtMs = 0;
         s_startedAtMs = now;
+        s_startedSkip = s_armedForSkip;
+        skip = s_armedForSkip;
         start = true;
     } else {
         s_armedAtMs = now;
-        USER_LOG_INFO("End of flight armed; press END again within %d s", END_FLIGHT_CONFIRM_MS / 1000);
+        s_armedForSkip = (kind == KIND_WAITING);
+        if (!s_armedForSkip) {
+            snprintf(s_driveText, sizeof(s_driveText), "checking...");
+            s_driveQueryPending = true;
+        }
+        USER_LOG_INFO("End of flight armed%s; press END again within %d s",
+                      s_armedForSkip ? " (finish without backup)" : "", END_FLIGHT_CONFIRM_MS / 1000);
     }
     pthread_mutex_unlock(&s_mutex);
 
     if (start) {
-        StartEndOfFlight();
+        StartEndOfFlight(skip);
     }
 }
 
@@ -211,25 +267,36 @@ bool EndFlight_GetMessage(char *out, size_t outLen)
     uint64_t now = NowMs();
     int kind;
     bool show = true;
+    bool queryDrive;
 
     /* Only this task subscribes, and the call can block for a moment, so
      * it runs before taking the lock the button handler needs. */
     EnsureFlightStatusSubscribed(now);
     pthread_mutex_lock(&s_mutex);
+    queryDrive = s_driveQueryPending;
+    pthread_mutex_unlock(&s_mutex);
+    if (queryDrive) {
+        QueryDrive();   /* blocks up to a few seconds: outside the lock */
+    }
+    pthread_mutex_lock(&s_mutex);
     EnsureAppStart();
     kind = ReadStatus(body, sizeof(body));
-    if (kind == 1) {
-        snprintf(text, sizeof(text), "%s", body);
-    } else if (s_startedAtMs != 0 && now - s_startedAtMs < END_FLIGHT_STARTING_MS) {
-        snprintf(text, sizeof(text), "END OF FLIGHT\nStarting...\n");
-    } else if (s_refusedAtMs != 0 && now - s_refusedAtMs < END_FLIGHT_REFUSED_MS) {
+    if (s_refusedAtMs != 0 && now - s_refusedAtMs < END_FLIGHT_REFUSED_MS) {
         snprintf(text, sizeof(text), "%s", s_refusedText);
     } else if (s_armedAtMs != 0 && now - s_armedAtMs <= END_FLIGHT_CONFIRM_MS) {
         int left = (int) ((END_FLIGHT_CONFIRM_MS - (now - s_armedAtMs) + 999) / 1000);
-        snprintf(text, sizeof(text),
-                 "END OF FLIGHT?\nPress END again within %d s.\n"
-                 "It stops recording and PSDK,\nand backs up to the USB drive.\n", left);
-    } else if (kind == 2) {
+        if (s_armedForSkip) {
+            snprintf(text, sizeof(text),
+                     "FINISH WITHOUT BACKUP?\nPress END again within %d s.\n", left);
+        } else {
+            snprintf(text, sizeof(text),
+                     "END OF FLIGHT?\nUSB drive: %s\nPress END again within %d s.\n", s_driveText, left);
+        }
+    } else if (s_startedAtMs != 0 && now - s_startedAtMs < END_FLIGHT_STARTING_MS &&
+               kind != KIND_RUNNING && !(kind == KIND_WAITING && !s_startedSkip)) {
+        snprintf(text, sizeof(text), "%s", s_startedSkip ? "END OF FLIGHT\nFinishing without backup...\n"
+                                                         : "END OF FLIGHT\nStarting...\n");
+    } else if (kind != KIND_NONE) {
         snprintf(text, sizeof(text), "%s", body);
     } else {
         show = false;

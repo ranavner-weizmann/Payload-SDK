@@ -23,6 +23,7 @@ extern "C" {
 #define END_FLIGHT_CONFIRM_MS     (3000)
 #define END_FLIGHT_STATUS_PATH    "/home/rsp/mamp_pi_dashboard/data/end_flight_rc.txt"
 #define END_FLIGHT_URL            "http://127.0.0.1:5050/end_of_flight"
+#define END_FLIGHT_DRIVE_URL      "http://127.0.0.1:5050/usb_drive_status?format=text"
 
 /* Call on each press of the END button (value 1). */
 void EndFlight_OnButtonPress(void);
